@@ -1,16 +1,60 @@
-# React + Vite
+# 🩺 Projeto Vetcare
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## 💻 Como Executar o Projeto
 
-Currently, two official plugins are available:
+Siga os passos abaixo para configurar e executar o ambiente de desenvolvimento localmente.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+### 📋 Pré-requisitos
 
-## React Compiler
+* [Node.js](https://nodejs.org/) (versão 18 ou superior)
+* [npm](https://www.npmjs.com/) (gerenciador de pacotes oficial do projeto)
+* Executável do [PocketBase](https://pocketbase.io/docs/) para o seu sistema operacional
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the ESLint configuration
+### 🔧 Passo a Passo
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+1. **Clonar o repositório e acessar a pasta:**
+
+```
+git clone <url_do_repositorio>
+cd Projeto-Vetcare
+```
+
+2. **Instalar as dependências do Frontend:**
+
+```
+npm install
+```
+
+3. **Configurar o PocketBase (Backend local):**
+
+* Baixe a versão correspondente ao seu SO no site do [PocketBase](https://pocketbase.io/docs/)
+* Extraia o executável (pocketbase ou pocketbase.exe) na raiz do projeto.
+
+4. **Iniciar o banco de dados e API:**
+
+* Linux / macOS:
+
+```
+./pocketbase serve
+```
+
+* Windows:
+
+```
+.\pocketbase.exe serve
+```
+
+* O painel administrativo estará disponível em http://127.0.0.1:8090/_/.
+
+5. **Iniciar a aplicação React:**
+
+Digite o comando abaixo no terminal e então vá até a URL que posteriormente aparecer.
+
+```
+npm run dev
+```
+
+
+
