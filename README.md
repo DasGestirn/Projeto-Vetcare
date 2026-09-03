@@ -24,6 +24,10 @@ cd Projeto-Vetcare
 2. **Instalar as dependências do Frontend:**
 
 ```
+cd client
+```
+
+```
 npm install
 ```
 
@@ -37,10 +41,18 @@ npm install
 * Linux / macOS:
 
 ```
+cd server
+```
+
+```
 ./pocketbase serve
 ```
 
 * Windows:
+
+```
+cd server
+```
 
 ```
 .\pocketbase.exe serve
@@ -50,7 +62,7 @@ npm install
 
 5. **Iniciar a aplicação React:**
 
-Digite o comando abaixo no terminal e então vá até a URL que posteriormente aparecer.
+Digite o comando abaixo no terminal (na pasta client) e então vá até a URL que posteriormente aparecer.
 
 ```
 npm run dev
