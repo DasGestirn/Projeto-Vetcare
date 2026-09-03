@@ -34,7 +34,7 @@ npm install
 3. **Configurar o PocketBase (Backend local):**
 
 * Baixe a versão correspondente ao seu SO no site do [PocketBase](https://pocketbase.io/docs/)
-* Extraia o executável (pocketbase ou pocketbase.exe) na raiz do projeto.
+* Extraia o executável (pocketbase ou pocketbase.exe) na pasta 'server' do projeto.
 
 4. **Iniciar o banco de dados e API:**
 
