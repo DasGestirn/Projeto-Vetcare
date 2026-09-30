@@ -1,4 +1,4 @@
-# Matriz de Permissão (RBAC) do sistema Vetcare
+# Matriz de Controle de Acesso Baseada em Perfis (RBAC) do sistema Vetcare
 
 |Ação                       |Administrador|Recepcionista|Veterinário|
 |---------------------------|-------------|-------------|-----------|
@@ -27,5 +27,3 @@
 * U (Update): Permissão para editar ou atualizar dados existentes.   
 * D (Delete): Permissão para excluir registros fisicamente ou marcá-los como inativos.   
 * E (Execute): Permissão para acionar fluxos de trabalho específicos (ex: disparar notificações, gerar relatórios, autenticar).   
-
-
