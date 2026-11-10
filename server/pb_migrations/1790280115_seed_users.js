@@ -15,6 +15,7 @@ migrate((app) => {
     verified: true,
   });
   user1.setPassword("emily123456");
+  user1.set("passwordConfirm", "emily123456");
 
   // Usuário 2: Recepcionista Priscila
 
@@ -27,6 +28,7 @@ migrate((app) => {
     verified: true,
   });
   user2.setPassword("priscila123456");
+  user2.set("passwordConfirm", "priscila123456");
 
   // Usuário 3: Administrador Lúcio
 
@@ -39,6 +41,8 @@ migrate((app) => {
     verified: true,
   });
   user3.setPassword("lucio123456");
+  user3.set("passwordConfirm", "lucio123456");
+
 
   app.save(user1);
   app.save(user2);

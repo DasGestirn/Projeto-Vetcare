@@ -1,12 +1,15 @@
-import { createBrowserRouter, RouterProvider } from 'react-router-dom';
-import { Login } from './pages/Login/Login'; 
+import { createBrowserRouter, redirect, RouterProvider } from 'react-router';
+import { Login } from './pages/Login/Login';
+import { AdminDashboard } from './pages/AdminDashboard/AdminDashboard'
+import { VetSchedule } from './pages/VetSchedule/VetSchedule'; 
+import { PetList } from './pages/PetList/PetList';
 import { requireRole, guestLoader } from './utils/authLoaders';
 
-const AdminDash = () => <h1>Dashboard Financeiro (Admin)</h1>;
-const VetAgenda = () => <h1>A Minha Agenda (Veterinário)</h1>;
-const ListaAnimais = () => <h1>Gestão de Animais (Partilhado)</h1>;
-
 const router = createBrowserRouter([
+  {
+    path: "/",
+    loader: () => redirect("/login"),
+  },
   {
     path: "/login",
     element: <Login />,
@@ -14,17 +17,17 @@ const router = createBrowserRouter([
   },
   {
     path: "/dashboard",
-    element: <AdminDash />,
+    element: <AdminDashboard />,
     loader: requireRole(['administracao']), 
   },
   {
     path: "/agenda",
-    element: <VetAgenda />,
+    element: <VetSchedule />,
     loader: requireRole(['veterinario']), 
   },
   {
     path: "/animais",
-    element: <ListaAnimais />,
+    element: <PetList />,
     loader: requireRole(['administracao', 'recepcao', 'veterinario']), 
   }
 ]);

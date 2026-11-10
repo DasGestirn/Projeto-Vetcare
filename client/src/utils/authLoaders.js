@@ -1,4 +1,4 @@
-import { redirect } from 'react-router-dom';
+import { redirect } from 'react-router';
 import { pb } from '../pocketbase';
 
 // Verifica se está logado. Se não estiver, vai mandar para o login
