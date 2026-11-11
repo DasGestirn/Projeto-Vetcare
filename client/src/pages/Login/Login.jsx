@@ -67,7 +67,8 @@ export function Login() {
               mt="md"
               {...form.getInputProps('password')}
             />
-            <Button 
+            <Button
+              color="#0f3d38" 
               fullWidth 
               mt="xl" 
               type="submit" 
