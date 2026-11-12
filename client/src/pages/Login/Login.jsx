@@ -1,15 +1,16 @@
 import {
+  Anchor,
   Button,
-  Paper,
   PasswordInput,
+  Text,
   TextInput,
   Title,
 } from '@mantine/core';
 import { useForm, isNotEmpty, isEmail } from '@mantine/form';
-import classes from './Login.module.css';
 import { useNavigate } from 'react-router';
 import { useMutation } from '@tanstack/react-query';
 import { pb } from '../../pocketbase';
+import classes from './Login.module.css';
 
 export function Login() {
   const navigate = useNavigate();
@@ -31,14 +32,14 @@ export function Login() {
     },
     onSuccess: (data) => {
       const role = data.record.role;
-      
+
       if (role === 'administracao') navigate('/dashboard');
       else if (role === 'veterinario') navigate('/agenda');
       else navigate('/animais');
     },
     onError: (error) => {
       alert('As credenciais estão incorretas: ' + error.message);
-    }
+    },
   });
 
   const handleSubmit = (values) => {
@@ -47,38 +48,61 @@ export function Login() {
 
   return (
     <div className={classes.wrapper}>
-      <Paper className={classes.form}>
-        <Title order={2} className={classes.title}>
-          Bem Vindo ao Vetcare!
+      <div className={classes.brandSection}>
+        <Title order={1} className={classes.brandTitle}>
+          VetCare
         </Title>
+        <Text className={classes.brandSubtitle}>
+          Todos os nossos serviços em um só lugar.
+        </Text>
+      </div>
 
-        <Paper withBorder shadow="md" p={30} mt={30} radius="md">
+      <div className={classes.formSection}>
+        <div className={classes.formContainer}>
+          <Title order={2} className={classes.title}>
+            Entrar
+          </Title>
+
           <form onSubmit={form.onSubmit(handleSubmit)}>
             <TextInput
-              label="Email"
-              placeholder="fulano@vetcare.com"
-              required
+              label="E-mail"
+              placeholder="voce@clinica.com"
+              radius="md"
+              size="md"
               {...form.getInputProps('email')}
             />
+
             <PasswordInput
               label="Senha"
-              placeholder="Sua senha"
-              required
+              placeholder="••••••••"
+              radius="md"
+              size="md"
               mt="md"
               {...form.getInputProps('password')}
             />
+
             <Button
-              color="#0f3d38" 
-              fullWidth 
-              mt="xl" 
-              type="submit" 
+              color="#11766d"
+              radius="md"
+              size="md"
+              fullWidth
+              mt="xl"
+              type="submit"
               loading={loginMutation.isPending}
             >
               Entrar
             </Button>
           </form>
-        </Paper>
-      </Paper>
+
+          <Anchor
+            href="#esqueci-senha"
+            className={classes.forgotLink}
+            onClick={(event) => event.preventDefault()}
+          >
+            Esqueci minha senha
+          </Anchor>
+        </div>
+      </div>
     </div>
   );
 }
