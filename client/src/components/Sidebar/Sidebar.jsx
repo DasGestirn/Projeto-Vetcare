@@ -1,35 +1,43 @@
 import { useLocation, useNavigate } from 'react-router';
-import { 
-  IconLayoutDashboard, 
-  IconCalendar, 
-  IconPaw, 
-  IconLogout, 
-  IconUser,
-  IconUsers
+import {
+  IconCalendar,
+  IconPaw,
+  IconClipboardList,
+  IconReportMoney,
+  IconUsers,
+  IconLogout,
+  IconUser
 } from '@tabler/icons-react';
 import { Group, Text, Stack } from '@mantine/core';
 import { useAuth } from '../../context/AuthContext';
 import classes from './Sidebar.module.css';
 
-// Mapeamento de rotas e permissões por perfil (RBAC)
+// Mapeamento de rotas e permissões por perfil (RBAC), conforme regra do protótipo:
+// recepcao -> Agenda + Registros | veterinario -> Agenda + Prontuários (Animais) | administracao -> Registros + Financeiro + Usuários
 const navigationData = [
-  { 
-    link: '/dashboard', 
-    label: 'Dashboard', 
-    icon: IconLayoutDashboard, 
-    roles: ['administracao'] 
+  {
+    link: '/agenda',
+    label: 'Agenda Clínica',
+    icon: IconCalendar,
+    roles: ['veterinario', 'recepcao']
   },
-  { 
-    link: '/agenda', 
-    label: 'Agenda Clínica', 
-    icon: IconCalendar, 
-    roles: ['veterinario', 'administracao', 'recepcao'] 
+  {
+    link: '/animais',
+    label: 'Prontuários',
+    icon: IconPaw,
+    roles: ['veterinario']
   },
-  { 
-    link: '/animais', 
-    label: 'Pacientes & Animais', 
-    icon: IconPaw, 
-    roles: ['administracao', 'recepcao', 'veterinario'] 
+  {
+    link: '/registros',
+    label: 'Registros',
+    icon: IconClipboardList,
+    roles: ['administracao', 'recepcao']
+  },
+  {
+    link: '/financeiro',
+    label: 'Financeiro',
+    icon: IconReportMoney,
+    roles: ['administracao']
   },
   { 
     link: '/usuarios', 
@@ -88,7 +96,7 @@ export function Sidebar() {
             <Text size="sm" fw={500} c="white">
               {user?.name || 'Usuário'}
             </Text>
-            <Text size="xs" c="black" style={{ textTransform: 'capitalize' }}>
+            <Text size="xs" c="#cfe6e0" style={{ textTransform: 'capitalize' }}>
               {user?.role}
             </Text>
           </Stack>

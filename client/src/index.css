@@ -1,0 +1,21 @@
+:root {
+  --vc-bg: #f4f7f5;
+  --vc-text: #14231f;
+  --vc-primary: #0f766e;
+  --vc-primary-dark: #0f3d38;
+  --vc-border: #b9cfc9;
+  --vc-border-light: #dce7e3;
+  --vc-row-border: #e6eeeb;
+  --vc-muted: #4a6360;
+  --vc-pill-bg: #d5ece7;
+  --vc-pill-text: #14231f;
+  --vc-pill-orange-bg: #fbe3da;
+  --vc-pill-orange-text: #7a2e14;
+
+  --mantine-color-dimmed: var(--vc-muted);
+}
+
+body {
+  background-color: var(--vc-bg);
+  color: var(--vc-text);
+}

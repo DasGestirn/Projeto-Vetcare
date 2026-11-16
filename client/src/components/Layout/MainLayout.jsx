@@ -5,7 +5,7 @@ import { Sidebar } from '../Sidebar/Sidebar';
 export function MainLayout() {
   return (
     <AppShell
-      navbar={{ width: 300, breakpoint: 'sm' }}
+      navbar={{ width: 232, breakpoint: 'sm' }}
       padding="md"
     >
       <AppShell.Navbar>

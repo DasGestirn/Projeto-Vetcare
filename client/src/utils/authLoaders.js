@@ -16,8 +16,8 @@ export function requireRole(allowedRoles) {
     if (!allowedRoles.includes(user.role)) {
 
       if (user.role === 'veterinario') throw redirect('/agenda');
-      if (user.role === 'administracao') throw redirect('/dashboard');
-      if (user.role === 'recepcao') throw redirect('/recepcao');
+      if (user.role === 'administracao') throw redirect('/financeiro');
+      if (user.role === 'recepcao') throw redirect('/agenda');
 
       throw redirect('/login');
     }
@@ -29,9 +29,9 @@ export function requireRole(allowedRoles) {
 export function guestLoader() {
   if (pb.authStore.isValid) {
     const role = pb.authStore.model.role;
-    if (role === 'administracao') throw redirect('/dashboard');
+    if (role === 'administracao') throw redirect('/financeiro');
     if (role === 'veterinario') throw redirect('/agenda');
-    if (role === 'recepcao') throw redirect('/recepcao');
+    if (role === 'recepcao') throw redirect('/agenda');
   }
   return null;
 }

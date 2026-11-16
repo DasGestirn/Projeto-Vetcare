@@ -1,0 +1,28 @@
+.bars {
+  height: 200px;
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.barColumn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.bar {
+  width: 100%;
+  background: var(--mantine-color-brand-6);
+  border-radius: 6px 6px 0 0;
+}
+
+.paymentRow {
+  border-top: 1px solid var(--mantine-color-gray-2);
+}
+
+.paymentRow:first-child {
+  border-top: none;
+}

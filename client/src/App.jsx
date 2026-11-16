@@ -1,8 +1,10 @@
 import { createBrowserRouter, redirect, RouterProvider } from 'react-router';
 import { Login } from './pages/Login/Login';
-import { AdminDashboard } from './pages/AdminDashboard/AdminDashboard'
-import { VetSchedule } from './pages/VetSchedule/VetSchedule'; 
+import { VetSchedule } from './pages/VetSchedule/VetSchedule';
 import { PetList } from './pages/PetList/PetList';
+import { Registros } from './pages/Registros/Registros';
+import { Financeiro } from './pages/Financeiro/Financeiro';
+import { Usuarios } from './pages/Usuarios/Usuarios';
 import { MainLayout } from './components/Layout/MainLayout';
 import { requireRole, guestLoader } from './utils/authLoaders';
 import { Users } from './pages/Users/Users';
@@ -25,7 +27,7 @@ const router = createBrowserRouter([
         element: <AdminDashboard />,
         loader: requireRole(['administracao']), 
       },
-{
+      {
         path: "/agenda",
         element: <VetSchedule />,
         loader: requireRole(['administracao', 'recepcao', 'veterinario']), 
@@ -33,7 +35,17 @@ const router = createBrowserRouter([
       {
         path: "/animais",
         element: <PetList />,
-        loader: requireRole(['administracao', 'recepcao', 'veterinario']), 
+        loader: requireRole(['administracao', 'recepcao', 'veterinario']),
+      },
+      {
+        path: "/registros",
+        element: <Registros />,
+        loader: requireRole(['administracao', 'recepcao']),
+      },
+      {
+        path: "/financeiro",
+        element: <Financeiro />,
+        loader: requireRole(['administracao']),
       },
       {
         path: "/usuarios",
