@@ -13,8 +13,9 @@ import { authService } from '../src/services/authService.js';
 import { userService } from '../src/services/userService.js';
 import { clinicService } from '../src/services/clinicService.js';
 import { requireRole, guestLoader } from '../src/utils/authLoaders.js';
-import { dateKey, financialSummary, monthBounds } from '../src/utils/format.js';
+import { dateKey, financialSummary, formatCpf, formatPhone, monthBounds, onlyDigits } from '../src/utils/format.js';
 import { getErrorMessage } from '../src/utils/pocketbaseErrors.js';
+import { isValidCpf, isValidPhone } from '../src/utils/validation.js';
 
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const executable = process.env.POCKETBASE_BIN || join(root, 'server', process.platform === 'win32' ? 'pocketbase.exe' : 'pocketbase');
@@ -106,8 +107,8 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
 
   await t.test('Cadastros reais de tutores e animais com relações, edição e busca', async () => {
     as(reception);
-    tutor = await clinicService.saveTutor(null, { name: 'Tutor integração', phone: '71999999999' });
-    tutor = await clinicService.saveTutor(tutor.id, { name: 'Tutor atualizado', phone: '71988888888' });
+    tutor = await clinicService.saveTutor(null, { name: 'Tutor integração', cpf: '390.533.447-05', phone: '71999999999' });
+    tutor = await clinicService.saveTutor(tutor.id, { ...tutor, name: 'Tutor atualizado', phone: '71988888888' });
     animal = await clinicService.saveAnimal(null, { name: 'Animal integração', species: 'Cão', breed: 'SRD', birthDate: '2020-01-01', tutor: tutor.id, active: true });
     animal = await clinicService.saveAnimal(animal.id, { ...animal, name: 'Animal atualizado' });
     const loaded = (await clinicService.animals()).find((record) => record.id === animal.id);
@@ -115,6 +116,75 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
     assert.equal(loaded.name, 'Animal atualizado');
     assert.ok((await clinicService.tutors()).some((record) => record.id === tutor.id));
     await assert.rejects(() => clinicService.saveAnimal(null, { ...animal, birthDate: '2026-02-31' }), (error) => error.status === 400);
+  });
+
+  await t.test('REQ 04 — Tutor normaliza dados, valida CPF e telefone e impede CPF duplicado', async () => {
+    as(reception);
+    const created = await clinicService.saveTutor(null, {
+      name: '  Maria   da Silva ', cpf: '111.444.777-35', phone: '(71) 3333-4444', email: ' Maria@Exemplo.COM ', address: ' Rua A, 10 ',
+    });
+    assert.deepEqual(
+      [created.name, created.cpf, created.phone, created.email, created.address],
+      ['Maria da Silva', '11144477735', '7133334444', 'maria@exemplo.com', 'Rua A, 10'],
+    );
+    // A normalização também vale para clientes da API que não usam o serviço do frontend.
+    const raw = await reception.collection('tutors').create({ name: 'Cliente API', cpf: '935.411.347-80', phone: '(71) 98765-4321' });
+    assert.deepEqual([raw.cpf, raw.phone], ['93541134780', '71987654321']);
+
+    const invalid = (field, code) => (error) => error.status === 400 && error.response?.data?.[field]?.code === code;
+    const base = { name: 'Inválido', cpf: '52998224725', phone: '71912345678' };
+    await assert.rejects(() => clinicService.saveTutor(null, { ...base, cpf: '111.444.777-36' }), invalid('cpf', 'invalid_cpf'));
+    await assert.rejects(() => clinicService.saveTutor(null, { ...base, cpf: '000.000.000-00' }), invalid('cpf', 'invalid_cpf'));
+    await assert.rejects(() => clinicService.saveTutor(null, { ...base, cpf: '' }), invalid('cpf', 'validation_required'));
+    await assert.rejects(() => clinicService.saveTutor(null, { ...base, phone: '7199' }), invalid('phone', 'invalid_phone'));
+    await assert.rejects(() => clinicService.saveTutor(null, { ...base, phone: '' }), invalid('phone', 'validation_required'));
+    await assert.rejects(() => clinicService.saveTutor(null, { ...base, email: 'sem-arroba' }), invalid('email', 'validation_is_email'));
+    await assert.rejects(() => clinicService.saveTutor(null, { ...base, name: '   ' }), invalid('name', 'validation_required'));
+    const invalidCpf = await clinicService.saveTutor(null, { ...base, cpf: '111.444.777-36' }).catch((error) => error);
+    assert.equal(getErrorMessage(invalidCpf), 'CPF: Informe um CPF válido.');
+
+    const duplicate = (error) => invalid('cpf', 'validation_not_unique')(error) && getErrorMessage(error) === 'CPF: já existe um registro com este valor.';
+    await assert.rejects(() => clinicService.saveTutor(null, { ...base, cpf: '111.444.777-35' }), duplicate);
+    await assert.rejects(() => clinicService.saveTutor(raw.id, { ...raw, cpf: created.cpf }), duplicate);
+    // Editar mantendo o próprio CPF não é duplicidade.
+    assert.equal((await clinicService.saveTutor(created.id, { ...created, phone: '71988887777' })).phone, '71988887777');
+    // O índice único também barra cadastros simultâneos com o mesmo CPF.
+    const attempts = await Promise.allSettled([1, 2].map(() => clinicService.saveTutor(null, base)));
+    assert.equal(attempts.filter((result) => result.status === 'fulfilled').length, 1);
+    await clinicService.deleteTutor(attempts.find((result) => result.status === 'fulfilled').value.id);
+
+    // Sem permissão, a resposta não revela se o CPF já está cadastrado.
+    const anonymousAttempt = await anonymous.collection('tutors').create({ ...base, cpf: created.cpf }).catch((error) => error);
+    assert.ok(denied(anonymousAttempt));
+    assert.equal(anonymousAttempt.response?.data?.cpf, undefined);
+    await clinicService.deleteTutor(created.id);
+    await clinicService.deleteTutor(raw.id);
+  });
+
+  await t.test('REQ 04 — Exclusão de tutor respeita perfis e vínculos com animais e pagamentos', async () => {
+    as(vet);
+    // Veterinário consulta, cadastra e altera tutores (CRU), mas não exclui.
+    let byVet = await clinicService.saveTutor(null, { name: 'Tutor do veterinário', cpf: '52998224725', phone: '71912345678' });
+    byVet = await clinicService.saveTutor(byVet.id, { ...byVet, name: 'Tutor do veterinário editado' });
+    assert.ok((await clinicService.tutors()).some((record) => record.name === 'Tutor do veterinário editado'));
+    await assert.rejects(() => clinicService.deleteTutor(byVet.id), denied);
+
+    as(reception);
+    const withAnimal = await clinicService.deleteTutor(tutor.id).catch((error) => error);
+    assert.equal(withAnimal.status, 400);
+    assert.match(getErrorMessage(withAnimal, 'Tutor vinculado.'), /Tutor vinculado/);
+    const linkedPayment = await clinicService.savePayment(null, { tutor: byVet.id, date: today, amount: '1', status: 'Pendente' });
+    await assert.rejects(() => clinicService.deleteTutor(byVet.id), (error) => error.status === 400);
+    await reception.collection('payments').delete(linkedPayment.id);
+    await clinicService.deleteTutor(byVet.id);
+    await assert.rejects(() => reception.collection('tutors').getOne(byVet.id), (error) => error.status === 404);
+    assert.ok(await reception.collection('tutors').getOne(tutor.id));
+
+    as(admin);
+    const byAdmin = await clinicService.saveTutor(null, { name: 'Tutor temporário', cpf: '52998224725', phone: '7133334444' });
+    await clinicService.deleteTutor(byAdmin.id);
+    await assert.rejects(() => anonymous.collection('tutors').delete(tutor.id), denied);
+    assert.equal((await anonymous.collection('tutors').getList(1, 10)).totalItems, 0);
   });
 
   await t.test('Veterinários vêm das contas reais; recepção só consulta e administração edita', async () => {
@@ -222,6 +292,7 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
     await start();
     const independent = new PocketBase(url);
     await independent.collection('users').authWithPassword('adm.lucio@vetcare.com', 'lucio123456');
+    assert.equal((await independent.collection('tutors').getOne(tutor.id)).cpf, '39053344705');
     assert.equal((await independent.collection('animals').getOne(animal.id)).name, 'Animal atualizado');
     assert.equal((await independent.collection('payments').getOne(payment.id)).amountCents, 3030);
     assert.equal((await independent.collection('medical_records').getOne(visit.id)).title, 'Consulta');
@@ -229,6 +300,22 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
     assert.equal((await independent.collection('prescriptions').getOne(prescription.id)).active, false);
     assert.equal((await independent.collection('appointments').getFullList()).length, 2);
   });
+});
+
+test('REQ 04 — Máscaras e validações de CPF e telefone no frontend', () => {
+  assert.equal(onlyDigits('(71) 9.87-65'), '7198765');
+  assert.equal(formatCpf('52998224725'), '529.982.247-25');
+  assert.equal(formatCpf('5299'), '529.9');
+  assert.equal(formatCpf('529.982.247-2599'), '529.982.247-25');
+  assert.equal(formatPhone('71987654321'), '(71) 98765-4321');
+  assert.equal(formatPhone('7133334444'), '(71) 3333-4444');
+  assert.equal(formatPhone('719'), '(71) 9');
+  assert.equal(formatPhone(''), '');
+  assert.ok(isValidCpf('529.982.247-25'));
+  for (const cpf of ['529.982.247-24', '111.111.111-11', '1234', '']) assert.ok(!isValidCpf(cpf), cpf);
+  assert.ok(isValidPhone('(71) 98765-4321'));
+  assert.ok(isValidPhone('(71) 3333-4444'));
+  for (const phone of ['(71) 8765-432', '(01) 98765-4321', '(71) 88765-4321', '']) assert.ok(!isValidPhone(phone), phone);
 });
 
 test('Datas locais e limites de mês não dependem de conversão UTC', () => {

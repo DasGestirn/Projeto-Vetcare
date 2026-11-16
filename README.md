@@ -93,11 +93,14 @@ A migração `1794820000_integrate_clinic.js` adiciona as coleções `tutors`, `
 
 A migração também preenche **somente perfis vazios das três contas do seed histórico**, pois aquele seed foi executado antes da criação do campo `role`. Nomes, senhas, IDs e perfis já preenchidos são preservados. Usuários antigos sem perfil devem receber um dos três perfis válidos pelo administrador. A migração é aditiva e não inclui reversão destrutiva das coleções.
 
-Os hooks em `server/pb_hooks` validam datas de calendário e a previsão da próxima dose. Inicie o executável dentro de `server` para carregar tanto os hooks quanto as migrações.
+A migração `1794830000_req04_tutor_fields.js` (REQ 04) completa a coleção `tutors` com `cpf` (obrigatório e único), `email` e `address`, e torna `phone` obrigatório. CPF e telefone são gravados somente com dígitos. A migração é aditiva: tutores já existentes são preservados e só têm o telefone convertido para dígitos. O CPF deles passa a ser exigido na próxima edição.
+
+Os hooks em `server/pb_hooks` validam datas de calendário e a previsão da próxima dose. Para tutores, eles normalizam os dados e verificam os dígitos do CPF, o formato do telefone (DDD + número) e a duplicidade do CPF. Inicie o executável dentro de `server` para carregar tanto os hooks quanto as migrações.
 
 ### Fluxos disponíveis
 
 - **Usuários:** administrador consulta, cria, edita e exclui; a própria conta não pode ser excluída. Alterações de perfil são verificadas no backend. A edição sem senha mantém a senha anterior.
+- **Tutores (REQ 04):** em Registros → Tutores é possível cadastrar, consultar (busca por nome, CPF, telefone, e-mail ou animal), editar e excluir. O formulário aplica máscara de CPF e telefone e valida os dados antes de enviar. Pelo `docs/RBAC.md`, os três perfis cadastram e editam, mas só administração e recepção excluem. Um tutor com animais ou pagamentos vinculados não pode ser excluído: o sistema avisa e mantém o registro.
 - **Registros:** tutores, animais e pagamentos são persistidos. Cadastre primeiro o tutor e depois o animal. No cadastro de veterinários, utilize a tela de usuários e selecione esse perfil. Recepcionistas apenas consultam os dados profissionais dos veterinários.
 - **Agenda:** veterinários e animais vêm do banco; consultas são associadas a ambos. Agendamento e cancelamento persistem, inclusive após recarga. Um índice único impede duas consultas ativas no mesmo horário e veterinário. As faixas de 09h a 17h foram mantidas da interface existente.
 - **Prontuários:** a ficha corresponde ao animal cadastrado. Atendimentos, vacinas e prescrições são consultados e gravados no PocketBase. A escrita clínica é exclusiva do perfil veterinário; as demais permissões seguem `docs/RBAC.md`.
