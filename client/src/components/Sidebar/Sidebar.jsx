@@ -39,11 +39,11 @@ const navigationData = [
     icon: IconReportMoney,
     roles: ['administracao']
   },
-  {
-    link: '/usuarios',
-    label: 'Usuários',
-    icon: IconUsers,
-    roles: ['administracao']
+  { 
+    link: '/usuarios', 
+    label: 'Usuários', 
+    icon: IconUsers, 
+    roles: ['administracao'] 
   },
 ];
 

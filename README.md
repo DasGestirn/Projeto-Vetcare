@@ -31,12 +31,28 @@ cd client
 npm install
 ```
 
-3. **Configurar o PocketBase (Backend local):**
+3. **Configurar variáveis de ambiente do Frontend:**
+
+Ainda na pasta `client`, crie uma cópia do arquivo `.env.example` renomeando-o para `.env`:
+
+* Linux / macOS:
+
+```
+cp .env.example .env
+```
+
+* Windows:
+
+```
+copy .env.example .env
+```
+
+4. **Configurar o PocketBase (Backend local):**
 
 * Baixe a versão correspondente ao seu SO no site do [PocketBase](https://pocketbase.io/docs/)
 * Extraia o executável (pocketbase ou pocketbase.exe) na pasta 'server' do projeto.
 
-4. **Iniciar o banco de dados e API:**
+5. **Iniciar o banco de dados e API:**
 
 * Linux / macOS:
 
@@ -60,13 +76,10 @@ cd server
 
 * O painel administrativo estará disponível em http://127.0.0.1:8090/_/.
 
-5. **Iniciar a aplicação React:**
+6. **Iniciar a aplicação React:**
 
 Digite o comando abaixo no terminal (na pasta client) e então vá até a URL que posteriormente aparecer.
 
 ```
 npm run dev
 ```
-
-
-

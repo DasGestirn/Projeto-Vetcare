@@ -7,6 +7,7 @@ import { Financeiro } from './pages/Financeiro/Financeiro';
 import { Usuarios } from './pages/Usuarios/Usuarios';
 import { MainLayout } from './components/Layout/MainLayout';
 import { requireRole, guestLoader } from './utils/authLoaders';
+import { Users } from './pages/Users/Users';
 
 const router = createBrowserRouter([
   {
@@ -22,9 +23,14 @@ const router = createBrowserRouter([
     element: <MainLayout />,
     children: [
       {
+        path: "/dashboard",
+        element: <AdminDashboard />,
+        loader: requireRole(['administracao']), 
+      },
+      {
         path: "/agenda",
         element: <VetSchedule />,
-        loader: requireRole(['veterinario', 'recepcao']),
+        loader: requireRole(['administracao', 'recepcao', 'veterinario']), 
       },
       {
         path: "/animais",
@@ -43,7 +49,7 @@ const router = createBrowserRouter([
       },
       {
         path: "/usuarios",
-        element: <Usuarios />,
+        element: <Users />,
         loader: requireRole(['administracao']),
       },
     ],
