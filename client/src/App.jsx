@@ -5,6 +5,7 @@ import { VetSchedule } from './pages/VetSchedule/VetSchedule';
 import { PetList } from './pages/PetList/PetList';
 import { MainLayout } from './components/Layout/MainLayout';
 import { requireRole, guestLoader } from './utils/authLoaders';
+import { Users } from './pages/Users/Users';
 
 const router = createBrowserRouter([
   {
@@ -24,15 +25,20 @@ const router = createBrowserRouter([
         element: <AdminDashboard />,
         loader: requireRole(['administracao']), 
       },
-      {
+{
         path: "/agenda",
         element: <VetSchedule />,
-        loader: requireRole(['veterinario']), 
+        loader: requireRole(['administracao', 'recepcao', 'veterinario']), 
       },
       {
         path: "/animais",
         element: <PetList />,
         loader: requireRole(['administracao', 'recepcao', 'veterinario']), 
+      },
+      {
+        path: "/usuarios",
+        element: <Users />,
+        loader: requireRole(['administracao']),
       },
     ],
   },

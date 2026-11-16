@@ -4,7 +4,8 @@ import {
   IconCalendar, 
   IconPaw, 
   IconLogout, 
-  IconUser 
+  IconUser,
+  IconUsers
 } from '@tabler/icons-react';
 import { Group, Text, Stack } from '@mantine/core';
 import { useAuth } from '../../context/AuthContext';
@@ -29,6 +30,12 @@ const navigationData = [
     label: 'Pacientes & Animais', 
     icon: IconPaw, 
     roles: ['administracao', 'recepcao', 'veterinario'] 
+  },
+  { 
+    link: '/usuarios', 
+    label: 'Usuários', 
+    icon: IconUsers, 
+    roles: ['administracao'] 
   },
 ];
 
