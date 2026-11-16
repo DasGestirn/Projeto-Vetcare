@@ -2,19 +2,24 @@
 
 import { createContext, useContext, useState, useEffect } from 'react';
 import { pb } from '../pocketbase';
+import { useQueryClient } from '@tanstack/react-query';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(pb.authStore.model);
+  const [user, setUser] = useState(pb.authStore.record);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
-    const unsubscribe = pb.authStore.onChange((token, model) => {
-      setUser(model);
-    });
+    let previous = pb.authStore.record;
+    const unsubscribe = pb.authStore.onChange((_token, record) => {
+      if (previous?.id !== record?.id || previous?.role !== record?.role) queryClient.clear();
+      previous = record;
+      setUser(record);
+    }, true);
 
     return () => unsubscribe();
-  }, []);
+  }, [queryClient]);
 
   const logout = () => {
     pb.authStore.clear();

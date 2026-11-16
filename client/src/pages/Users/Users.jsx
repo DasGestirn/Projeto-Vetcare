@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useNavigate } from 'react-router';
 import {
   Title,
   Button,
@@ -19,18 +20,9 @@ import {
 import { IconSearch, IconPlus, IconAlertCircle } from '@tabler/icons-react';
 import { useUsers } from '../../hooks/useUsers';
 import { useAuth } from '../../context/AuthContext';
-
-const ROLE_OPTIONS = [
-  { value: 'administracao', label: 'Administrador' },
-  { value: 'recepcao', label: 'Recepcionista' },
-  { value: 'veterinario', label: 'Médico veterinário' },
-];
-
-const ROLE_LABELS = {
-  administracao: 'Administrador',
-  recepcao: 'Recepcionista',
-  veterinario: 'Médico veterinário',
-};
+import { ROLE_OPTIONS, ROLE_LABELS, getRoleHomePath } from '../../utils/roles.js';
+import { getErrorMessage } from '../../utils/pocketbaseErrors.js';
+import { pb } from '../../pocketbase.js';
 
 const INITIAL_FORM = {
   name: '',
@@ -42,13 +34,18 @@ const INITIAL_FORM = {
 
 export function Users() {
   const { user: currentUser } = useAuth();
-  const { users, searchTerm, setSearchTerm, loading, error, addUser, editUser, removeUser } = useUsers();
+  const { users, searchTerm, setSearchTerm, loading, error, refetch, addUser, editUser, removeUser } = useUsers();
+  const navigate = useNavigate();
+  const operation = useRef(false);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [formData, setFormData] = useState(INITIAL_FORM);
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const [operationError, setOperationError] = useState(null);
 
   const openCreateModal = () => {
     setEditingUser(null);
@@ -72,29 +69,50 @@ export function Users() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (operation.current) return;
+    operation.current = true;
     try {
       setSubmitting(true);
       setFormError(null);
       if (editingUser) {
-        await editUser(editingUser.id, formData);
+        const saved = await editUser(editingUser.id, formData);
+        if (saved.id === currentUser?.id) {
+          if (formData.password) {
+            pb.authStore.clear();
+            navigate('/login', { replace: true });
+          } else if (saved.role !== currentUser.role) {
+            navigate(getRoleHomePath(saved.role), { replace: true });
+          }
+        }
       } else {
         await addUser(formData);
       }
       setModalOpen(false);
+      setFormData(INITIAL_FORM);
+      setFeedback(editingUser ? 'Usuário atualizado.' : 'Usuário cadastrado.');
     } catch (err) {
-      setFormError(err?.message || 'Não foi possível salvar o usuário.');
+      setFormError(getErrorMessage(err, 'Não foi possível salvar o usuário.'));
     } finally {
+      operation.current = false;
       setSubmitting(false);
     }
   };
 
   const handleDelete = async (targetUser) => {
     if (targetUser.id === currentUser?.id) return;
+    if (operation.current) return;
     if (!window.confirm(`Deseja realmente excluir o usuário "${targetUser.name}"?`)) return;
     try {
+      operation.current = true;
+      setDeletingId(targetUser.id);
+      setOperationError(null);
       await removeUser(targetUser.id);
+      setFeedback('Usuário excluído.');
     } catch (err) {
-      alert(err?.message || 'Erro ao excluir usuário.');
+      setOperationError(getErrorMessage(err, 'Erro ao excluir usuário.'));
+    } finally {
+      operation.current = false;
+      setDeletingId(null);
     }
   };
 
@@ -106,10 +124,13 @@ export function Users() {
           leftSection={<IconPlus size={16} />}
           color="#11766d"
           onClick={openCreateModal}
+          disabled={submitting || Boolean(deletingId)}
         >
           Novo usuário
         </Button>
       </Group>
+      {feedback && <Alert color="teal" withCloseButton onClose={() => setFeedback(null)}>{feedback}</Alert>}
+      {operationError && <Alert color="red" role="alert">{operationError}</Alert>}
 
       <Paper withBorder p="md" radius="md">
         <TextInput
@@ -124,6 +145,7 @@ export function Users() {
         {error && (
           <Alert icon={<IconAlertCircle size={16} />} color="red" mb="md">
             {error}
+            <Button variant="subtle" size="xs" onClick={() => refetch()}>Tentar novamente</Button>
           </Alert>
         )}
 
@@ -158,7 +180,7 @@ export function Users() {
                   </Table.Td>
                   <Table.Td>
                     <Group gap="xs" justify="flex-end">
-                      <Button variant="default" size="xs" onClick={() => openEditModal(u)}>
+                      <Button variant="default" size="xs" disabled={submitting || Boolean(deletingId)} onClick={() => openEditModal(u)}>
                         Editar
                       </Button>
                       {u.id !== currentUser?.id && (
@@ -167,6 +189,8 @@ export function Users() {
                           color="red"
                           size="xs"
                           onClick={() => handleDelete(u)}
+                          loading={deletingId === u.id}
+                          disabled={submitting || (Boolean(deletingId) && deletingId !== u.id)}
                         >
                           Excluir
                         </Button>
@@ -179,10 +203,14 @@ export function Users() {
           </Table>
         )}
       </Paper>
+      {!loading && !error && users.length === 0 && <Text c="dimmed" ta="center">Nenhum usuário encontrado.</Text>}
 
       <Modal
         opened={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={() => { if (!submitting) setModalOpen(false); }}
+        closeOnClickOutside={!submitting}
+        closeOnEscape={!submitting}
+        withCloseButton={!submitting}
         title={editingUser ? 'Editar usuário' : 'Novo usuário'}
         centered
       >
@@ -215,6 +243,7 @@ export function Users() {
               label="Permissão (Perfil)"
               data={ROLE_OPTIONS}
               required
+              allowDeselect={false}
               value={formData.role}
               onChange={(value) => setFormData({ ...formData, role: value })}
             />
@@ -238,7 +267,7 @@ export function Users() {
             />
 
             <Group justify="flex-end" mt="md">
-              <Button variant="default" onClick={() => setModalOpen(false)}>
+              <Button variant="default" disabled={submitting} onClick={() => setModalOpen(false)}>
                 Cancelar
               </Button>
               <Button type="submit" color="#11766d" loading={submitting}>

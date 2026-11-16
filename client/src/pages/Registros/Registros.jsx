@@ -1,34 +1,15 @@
 import { useState } from 'react';
 import { Tabs, Paper, TextInput, Table, Button, Badge, Text } from '@mantine/core';
 import { PageHeader } from '../../components/PageHeader/PageHeader';
+import { useNavigate, useSearchParams } from 'react-router';
+import { useAuth } from '../../context/AuthContext';
+import { useClinicQuery } from '../../hooks/useClinic';
+import { clinicService } from '../../services/clinicService.js';
+import { QueryState } from '../../components/QueryState';
+import { RecordForm } from '../../components/RecordForm';
+import { animalAge, dateKey, formatDate, formatMoney } from '../../utils/format.js';
 
 const thStyle = { fontSize: 13, fontWeight: 700, color: 'var(--vc-muted)' };
-
-const tutors = [
-  { name: 'Marina Souza', phone: '(71) 99999-0001', animals: 'Thor' },
-  { name: 'Carlos Lima', phone: '(71) 99999-0002', animals: 'Mel, Pipoca' },
-  { name: 'Ana Prado', phone: '(71) 99999-0003', animals: 'Bidu' },
-  { name: 'Rita Alves', phone: '(71) 99999-0004', animals: 'Luna' },
-];
-
-const animals = [
-  { name: 'Thor', species: 'Cão', breed: 'Labrador', age: '4 anos', tutor: 'Marina Souza' },
-  { name: 'Mel', species: 'Gata', breed: 'SRD', age: '2 anos', tutor: 'Juliana Lombroso' },
-  { name: 'Bidu', species: 'Cão', breed: 'Poodle', age: '7 anos', tutor: 'Ana Prado' },
-  { name: 'Pipoca', species: 'Cão', breed: 'Shih Tzu', age: '3 anos', tutor: 'Anderson Simas' },
-];
-
-const veterinarians = [
-  { name: 'Dra. Ana Lima', specialty: 'Clínica Geral', phone: '(71) 98888-0001' },
-  { name: 'Dr. Paulo Reis', specialty: 'Cirurgia', phone: '(71) 98888-0002' },
-  { name: 'Dra. Emily', specialty: 'Dermatologia', phone: '(71) 98888-0003' },
-];
-
-const paymentsList = [
-  { tutor: 'Marina Souza', date: '05/10/2026', amount: '180', status: 'Pago' },
-  { tutor: 'Carlos Lima', date: '06/10/2026', amount: '95', status: 'Pendente' },
-  { tutor: 'Rita Alves', date: '07/10/2026', amount: '240', status: 'Pago' },
-];
 
 const TABS = [
   { value: 'tutores', label: 'Tutores', placeholder: 'Buscar tutor ou animal' },
@@ -42,8 +23,25 @@ function matches(query, ...values) {
 }
 
 export function Registros() {
-  const [tab, setTab] = useState('tutores');
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(TABS.some((item) => item.value === params.get('tab')) ? params.get('tab') : 'tutores');
   const [query, setQuery] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [saved, setSaved] = useState(false);
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const tutorsQuery = useClinicQuery(['tutors'], clinicService.tutors);
+  const animalsQuery = useClinicQuery(['animals'], clinicService.animals);
+  const vetsQuery = useClinicQuery(['veterinarians'], clinicService.veterinarians);
+  const paymentsQuery = useClinicQuery(['payments'], clinicService.payments);
+  const tutors = (tutorsQuery.data || []).map((tutor) => ({ ...tutor,
+    animals: (animalsQuery.data || []).filter((animal) => animal.tutor === tutor.id).map((animal) => animal.name).join(', ') || '—',
+  }));
+  const animals = (animalsQuery.data || []).map((animal) => ({ ...animal, tutorName: animal.expand?.tutor?.name || '—', age: animalAge(animal.birthDate) }));
+  const veterinarians = vetsQuery.data || [];
+  const paymentsList = (paymentsQuery.data || []).map((payment) => ({ ...payment, tutorName: payment.expand?.tutor?.name || '—' }));
+  const activeQuery = { tutores: tutorsQuery, animais: animalsQuery, veterinarios: vetsQuery, pagamentos: paymentsQuery }[tab];
+  const canEditVet = user?.role !== 'recepcao';
 
   const handleTabChange = (value) => {
     setTab(value);
@@ -51,9 +49,29 @@ export function Registros() {
   };
 
   const filteredTutors = tutors.filter((t) => matches(query, t.name, t.phone, t.animals));
-  const filteredAnimals = animals.filter((a) => matches(query, a.name, a.species, a.breed, a.tutor));
+  const filteredAnimals = animals.filter((a) => matches(query, a.name, a.species, a.breed, a.tutorName));
   const filteredVets = veterinarians.filter((v) => matches(query, v.name, v.specialty, v.phone));
-  const filteredPayments = paymentsList.filter((p) => matches(query, p.tutor, p.status, p.date));
+  const filteredPayments = paymentsList.filter((p) => matches(query, p.tutorName, p.status, formatDate(p.date)));
+
+  const tutorOptions = tutors.map(({ id, name }) => ({ value: id, label: name }));
+  const fields = {
+    tutores: [{ name: 'name', label: 'Nome', required: true }, { name: 'phone', label: 'Telefone' }],
+    animais: [
+      { name: 'name', label: 'Nome', required: true }, { name: 'species', label: 'Espécie', required: true },
+      { name: 'breed', label: 'Raça' }, { name: 'birthDate', label: 'Data de nascimento', type: 'date', max: dateKey() },
+      { name: 'tutor', label: 'Tutor', type: 'select', required: true, data: tutorOptions },
+      { name: 'active', label: 'Ativo', type: 'checkbox' },
+    ],
+    veterinarios: [{ name: 'name', label: 'Nome', required: true }, { name: 'specialty', label: 'Especialidade' }, { name: 'phone', label: 'Telefone' }],
+    pagamentos: [
+      { name: 'tutor', label: 'Tutor', type: 'select', required: true, data: tutorOptions },
+      { name: 'date', label: 'Data', type: 'date', required: true },
+      { name: 'amount', label: 'Valor (R$)', type: 'number', min: '0.01', step: '0.01', required: true },
+      { name: 'status', label: 'Status', type: 'select', required: true, data: ['Pago', 'Pendente'] },
+    ],
+  };
+  const labels = { tutores: 'tutor', animais: 'animal', veterinarios: 'veterinário', pagamentos: 'pagamento' };
+  const savers = { tutores: clinicService.saveTutor, animais: clinicService.saveAnimal, veterinarios: clinicService.saveVeterinarian, pagamentos: clinicService.savePayment };
 
   const activeTab = TABS.find((t) => t.value === tab);
 
@@ -61,8 +79,8 @@ export function Registros() {
     <>
       <PageHeader
         title="Registros"
-        actionLabel="Novo tutor"
-        onAction={() => alert('Cadastro de tutor (em breve).')}
+        actionLabel={tab === 'veterinarios' ? (user?.role === 'administracao' ? 'Novo veterinário' : undefined) : `Novo ${labels[tab]}`}
+        onAction={() => tab === 'veterinarios' ? navigate('/usuarios') : setEditing({ tab, record: null })}
       />
 
       <Tabs value={tab} onChange={handleTabChange} mb="md">
@@ -74,6 +92,7 @@ export function Registros() {
       </Tabs>
 
       <Paper withBorder p="lg">
+        {saved && <Text c="teal" mb="md" role="status">Registro salvo.</Text>}
         <TextInput
           placeholder={activeTab.placeholder}
           value={query}
@@ -82,7 +101,8 @@ export function Registros() {
           maw={320}
         />
 
-        {tab === 'tutores' && (
+        <QueryState query={activeQuery} />
+        {tab === 'tutores' && !activeQuery.isPending && !activeQuery.isError && (
           <Table verticalSpacing="sm" highlightOnHover>
             <Table.Thead>
               <Table.Tr>
@@ -94,12 +114,12 @@ export function Registros() {
             </Table.Thead>
             <Table.Tbody>
               {filteredTutors.map((tutor) => (
-                <Table.Tr key={tutor.name}>
+                <Table.Tr key={tutor.id}>
                   <Table.Td fw={500}>{tutor.name}</Table.Td>
                   <Table.Td>{tutor.phone}</Table.Td>
                   <Table.Td><Badge variant="light">{tutor.animals}</Badge></Table.Td>
                   <Table.Td>
-                    <Button size="xs" variant="default" onClick={() => alert(`Editar ${tutor.name} (em breve).`)}>
+                    <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: tutor })}>
                       Editar
                     </Button>
                   </Table.Td>
@@ -109,7 +129,7 @@ export function Registros() {
           </Table>
         )}
 
-        {tab === 'animais' && (
+        {tab === 'animais' && !activeQuery.isPending && !activeQuery.isError && (
           <Table verticalSpacing="sm" highlightOnHover>
             <Table.Thead>
               <Table.Tr>
@@ -123,14 +143,14 @@ export function Registros() {
             </Table.Thead>
             <Table.Tbody>
               {filteredAnimals.map((animal) => (
-                <Table.Tr key={animal.name}>
+                <Table.Tr key={animal.id}>
                   <Table.Td fw={500}>{animal.name}</Table.Td>
                   <Table.Td>{animal.species}</Table.Td>
                   <Table.Td>{animal.breed}</Table.Td>
                   <Table.Td>{animal.age}</Table.Td>
-                  <Table.Td>{animal.tutor}</Table.Td>
+                  <Table.Td>{animal.tutorName}</Table.Td>
                   <Table.Td>
-                    <Button size="xs" variant="default" onClick={() => alert(`Editar ${animal.name} (em breve).`)}>
+                    <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: animal })}>
                       Editar
                     </Button>
                   </Table.Td>
@@ -140,7 +160,7 @@ export function Registros() {
           </Table>
         )}
 
-        {tab === 'veterinarios' && (
+        {tab === 'veterinarios' && !activeQuery.isPending && !activeQuery.isError && (
           <Table verticalSpacing="sm" highlightOnHover>
             <Table.Thead>
               <Table.Tr>
@@ -152,14 +172,14 @@ export function Registros() {
             </Table.Thead>
             <Table.Tbody>
               {filteredVets.map((vet) => (
-                <Table.Tr key={vet.name}>
+                <Table.Tr key={vet.id}>
                   <Table.Td fw={500}>{vet.name}</Table.Td>
                   <Table.Td>{vet.specialty}</Table.Td>
                   <Table.Td>{vet.phone}</Table.Td>
                   <Table.Td>
-                    <Button size="xs" variant="default" onClick={() => alert(`Editar ${vet.name} (em breve).`)}>
+                    {canEditVet && <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: vet })}>
                       Editar
-                    </Button>
+                    </Button>}
                   </Table.Td>
                 </Table.Tr>
               ))}
@@ -167,7 +187,7 @@ export function Registros() {
           </Table>
         )}
 
-        {tab === 'pagamentos' && (
+        {tab === 'pagamentos' && !activeQuery.isPending && !activeQuery.isError && (
           <Table verticalSpacing="sm" highlightOnHover>
             <Table.Thead>
               <Table.Tr>
@@ -180,17 +200,17 @@ export function Registros() {
             </Table.Thead>
             <Table.Tbody>
               {filteredPayments.map((payment) => (
-                <Table.Tr key={`${payment.tutor}-${payment.date}`}>
-                  <Table.Td fw={500}>{payment.tutor}</Table.Td>
-                  <Table.Td>{payment.date}</Table.Td>
-                  <Table.Td>R$ {payment.amount}</Table.Td>
+                <Table.Tr key={payment.id}>
+                  <Table.Td fw={500}>{payment.tutorName}</Table.Td>
+                  <Table.Td>{formatDate(payment.date)}</Table.Td>
+                  <Table.Td>{formatMoney(payment.amountCents)}</Table.Td>
                   <Table.Td>
                     <Badge color={payment.status === 'Pago' ? 'brand' : 'orange'} variant="light">
                       {payment.status}
                     </Badge>
                   </Table.Td>
                   <Table.Td>
-                    <Button size="xs" variant="default" onClick={() => alert(`Editar pagamento de ${payment.tutor} (em breve).`)}>
+                    <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: payment })}>
                       Editar
                     </Button>
                   </Table.Td>
@@ -200,19 +220,27 @@ export function Registros() {
           </Table>
         )}
 
-        {filteredTutors.length === 0 && tab === 'tutores' && (
+        {!activeQuery.isPending && !activeQuery.isError && filteredTutors.length === 0 && tab === 'tutores' && (
           <Text c="dimmed" ta="center" py="md">Nenhum tutor encontrado.</Text>
         )}
-        {filteredAnimals.length === 0 && tab === 'animais' && (
+        {!activeQuery.isPending && !activeQuery.isError && filteredAnimals.length === 0 && tab === 'animais' && (
           <Text c="dimmed" ta="center" py="md">Nenhum animal encontrado.</Text>
         )}
-        {filteredVets.length === 0 && tab === 'veterinarios' && (
+        {!activeQuery.isPending && !activeQuery.isError && filteredVets.length === 0 && tab === 'veterinarios' && (
           <Text c="dimmed" ta="center" py="md">Nenhum veterinário encontrado.</Text>
         )}
-        {filteredPayments.length === 0 && tab === 'pagamentos' && (
+        {!activeQuery.isPending && !activeQuery.isError && filteredPayments.length === 0 && tab === 'pagamentos' && (
           <Text c="dimmed" ta="center" py="md">Nenhum pagamento encontrado.</Text>
         )}
       </Paper>
+      {editing && <RecordForm key={`${editing.tab}-${editing.record?.id || 'new'}`}
+        opened onClose={() => setEditing(null)} title={`${editing.record ? 'Editar' : 'Novo'} ${labels[editing.tab]}`}
+        fields={fields[editing.tab]}
+        initialValues={{ name: '', phone: '', species: '', breed: '', birthDate: '', tutor: '', active: true,
+          date: dateKey(), status: 'Pendente', specialty: '', ...editing.record,
+          amount: editing.record ? (editing.record.amountCents || 0) / 100 : '',
+        }}
+        save={(data) => savers[editing.tab](editing.record?.id, data)} onSaved={() => setSaved(true)} />}
     </>
   );
 }

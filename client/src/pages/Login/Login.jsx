@@ -1,5 +1,6 @@
 import {
   Anchor,
+  Alert,
   Button,
   PasswordInput,
   Text,
@@ -9,11 +10,16 @@ import {
 import { useForm, isNotEmpty, isEmail } from '@mantine/form';
 import { useNavigate } from 'react-router';
 import { useMutation } from '@tanstack/react-query';
-import { pb } from '../../pocketbase';
+import { authService } from '../../services/authService.js';
+import { getRoleHomePath } from '../../utils/roles.js';
+import { getErrorMessage } from '../../utils/pocketbaseErrors.js';
 import classes from './Login.module.css';
+import { pb } from '../../pocketbase.js';
+import { useRef } from 'react';
 
 export function Login() {
   const navigate = useNavigate();
+  const loginLock = useRef(false);
 
   const form = useForm({
     initialValues: {
@@ -27,23 +33,27 @@ export function Login() {
   });
 
   const loginMutation = useMutation({
-    mutationFn: async ({ email, password }) => {
-      return await pb.collection('users').authWithPassword(email, password);
-    },
+    mutationFn: authService.login,
     onSuccess: (data) => {
-      const role = data.record.role;
-
-      if (role === 'administracao') navigate('/financeiro');
-      else if (role === 'veterinario') navigate('/agenda');
-      else navigate('/animais');
-    },
-    onError: (error) => {
-      alert('As credenciais estão incorretas: ' + error.message);
+      navigate(getRoleHomePath(data.record.role), { replace: true });
     },
   });
+  const resetMutation = useMutation({
+    mutationFn: (email) => pb.collection('users').requestPasswordReset(email.trim()),
+  });
+  const requestReset = (event) => {
+    event.preventDefault();
+    if (resetMutation.isPending || loginMutation.isPending) return;
+    if (form.validateField('email').hasError) return;
+    resetMutation.mutate(form.values.email);
+  };
 
-  const handleSubmit = (values) => {
-    loginMutation.mutate(values);
+  const handleSubmit = async (values) => {
+    if (loginLock.current || resetMutation.isPending) return;
+    loginLock.current = true;
+    try { await loginMutation.mutateAsync(values); }
+    catch { /* O erro é exibido no formulário. */ }
+    finally { loginLock.current = false; }
   };
 
   return (
@@ -63,7 +73,12 @@ export function Login() {
             Entrar
           </Title>
 
-          <form onSubmit={form.onSubmit(handleSubmit)}>
+          <form onSubmit={(event) => form.onSubmit(handleSubmit)(event)}>
+            {loginMutation.isError && (
+              <Alert color="red" mb="md" role="alert">
+                {getErrorMessage(loginMutation.error, 'E-mail ou senha incorretos.')}
+              </Alert>
+            )}
             <TextInput
               label="E-mail"
               placeholder="voce@clinica.com"
@@ -90,11 +105,14 @@ export function Login() {
               Entrar
             </Button>
           </form>
+          {resetMutation.isSuccess && <Alert color="teal" mt="md" role="status">Se o e-mail estiver cadastrado, você receberá as instruções para redefinir a senha.</Alert>}
+          {resetMutation.isError && <Alert color="red" mt="md" role="alert">{getErrorMessage(resetMutation.error, 'Não foi possível solicitar a recuperação de senha.')}</Alert>}
 
           <Anchor
             href="#esqueci-senha"
             className={classes.forgotLink}
-            onClick={(event) => event.preventDefault()}
+            onClick={requestReset}
+            aria-disabled={resetMutation.isPending || loginMutation.isPending}
           >
             Esqueci minha senha
           </Anchor>
