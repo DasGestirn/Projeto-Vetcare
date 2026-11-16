@@ -1,0 +1,35 @@
+.grow {
+  flex: 1;
+}
+
+.calendar {
+  display: grid;
+  grid-template-columns: 90px 1fr 1fr;
+  gap: 12px;
+}
+
+.time {
+  padding-top: 14px;
+}
+
+.appointment,
+.cancel,
+.free {
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-height: 56px;
+}
+
+.appointment {
+  background: #d5ece7;
+}
+
+.cancel {
+  background: #fbe3da;
+}
+
+.free {
+  border: 1px dashed #b9cfc9;
+  display: flex;
+  align-items: center;
+}

@@ -33,7 +33,7 @@ export function Login() {
     onSuccess: (data) => {
       const role = data.record.role;
 
-      if (role === 'administracao') navigate('/dashboard');
+      if (role === 'administracao') navigate('/financeiro');
       else if (role === 'veterinario') navigate('/agenda');
       else navigate('/animais');
     },
@@ -82,9 +82,6 @@ export function Login() {
             />
 
             <Button
-              color="#11766d"
-              radius="md"
-              size="md"
               fullWidth
               mt="xl"
               type="submit"

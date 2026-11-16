@@ -5,8 +5,8 @@
 }
 
 .brandSection {
-  flex: 1.22;
-  background-color: #123832;
+  flex: 1;
+  background-color: #0f3d38;
   color: #ffffff;
   display: flex;
   flex-direction: column;
@@ -19,8 +19,7 @@
 }
 
 .brandTitle {
-  font-family: Outfit, var(--mantine-font-family);
-  font-size: 2.75rem;
+  font-size: 3rem;
   font-weight: 700;
   line-height: 1.2;
   margin-bottom: 0.5rem;
@@ -30,12 +29,12 @@
 .brandSubtitle {
   font-size: 1.125rem;
   font-weight: 400;
-  color: #e4eae9;
+  color: #cfe6e0;
 }
 
 .formSection {
   flex: 1;
-  background-color: #f8f9f8;
+  background-color: #f4f7f5;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -49,8 +48,7 @@
 }
 
 .title {
-  color: #1a1b1e;
-  font-family: Outfit, var(--mantine-font-family);
+  color: #14231f;
   font-size: 1.75rem;
   font-weight: 700;
   text-align: left;
@@ -61,7 +59,7 @@
   display: block;
   text-align: center;
   margin-top: 1rem;
-  color: #11766d;
+  color: #0f6a62;
   font-size: var(--mantine-font-size-sm);
   text-decoration: underline;
 }
