@@ -23,9 +23,11 @@ export const clinicService = {
   }),
   deleteTutor: (id) => pb.collection('tutors').delete(id),
   saveAnimal: (id, data) => save('animals', id, {
-    name: data.name.trim(), species: data.species.trim(), breed: data.breed.trim(),
+    name: data.name.trim(), species: data.species.trim(), breed: (data.breed || '').trim(), sex: data.sex,
     birthDate: data.birthDate || '', tutor: data.tutor, active: data.active,
   }),
+  setAnimalActive: (id, active) => pb.collection('animals').update(id, { active }),
+  deleteAnimal: (id) => pb.collection('animals').delete(id),
   saveVeterinarian: (id, data) => save('users', id, { name: data.name.trim(), specialty: data.specialty.trim(), phone: data.phone.trim() }),
   savePayment: (id, data) => save('payments', id, {
     tutor: data.tutor, date: data.date, amountCents: Math.round(Number(data.amount) * 100), status: data.status,

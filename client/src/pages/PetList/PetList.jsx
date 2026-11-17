@@ -56,7 +56,7 @@ function AnimalDetail({ animal, onBack }) {
                 <Avatar radius="xl" size="lg">{animal.name[0]}</Avatar>
                 <div style={{ flex: 1 }}>
                   <Text fw={700} size="lg">{animal.name}</Text>
-                  <Text size="sm" c="dimmed">{animal.species} · {animal.breed || '—'} · {animalAge(animal.birthDate)} · Tutor: {animal.expand?.tutor?.name || '—'}</Text>
+                  <Text size="sm" c="dimmed">{animal.species} · {animal.breed || '—'} · {animal.sex || '—'} · {animalAge(animal.birthDate)} · Tutor: {animal.expand?.tutor?.name || '—'}</Text>
                 </div>
                 <Badge color={animal.active ? 'brand' : 'gray'}>{animal.active ? 'Ativo' : 'Inativo'}</Badge>
               </Group>
@@ -163,9 +163,10 @@ export function PetList() {
         </Table>}
       </Paper>
       {creating && <RecordForm opened onClose={() => setCreating(false)} title="Novo prontuário"
-        initialValues={{ name: '', species: '', breed: '', birthDate: '', tutor: '', active: true }}
+        initialValues={{ name: '', species: '', breed: '', sex: '', birthDate: '', tutor: '', active: true }}
         fields={[
           { name: 'name', label: 'Nome', required: true }, { name: 'species', label: 'Espécie', required: true }, { name: 'breed', label: 'Raça' },
+          { name: 'sex', label: 'Sexo', type: 'select', required: true, data: ['Macho', 'Fêmea'] },
           { name: 'birthDate', label: 'Data de nascimento', type: 'date', max: dateKey() },
           { name: 'tutor', label: 'Tutor', type: 'select', required: true,
             data: (tutorsQuery.data || []).map(({ id, name }) => ({ value: id, label: name })), description: 'Tutores cadastrados em Registros.' },

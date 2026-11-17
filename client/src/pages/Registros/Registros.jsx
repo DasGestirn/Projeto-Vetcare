@@ -9,16 +9,18 @@ import { QueryState } from '../../components/QueryState';
 import { RecordForm } from '../../components/RecordForm';
 import { animalAge, dateKey, formatCpf, formatDate, formatMoney, formatPhone } from '../../utils/format.js';
 import { isValidCpf, isValidPhone } from '../../utils/validation.js';
+import { DeleteRecordModal } from '../../components/DeleteRecordModal';
 import { TutorDeleteModal } from './TutorDeleteModal';
 
 const thStyle = { fontSize: 13, fontWeight: 700, color: 'var(--vc-muted)' };
 
-// RBAC (docs/RBAC.md): os três perfis mantêm tutores, mas só administração e recepção excluem.
-const TUTOR_DELETE_ROLES = ['administracao', 'recepcao'];
+// RBAC (docs/RBAC.md): os três perfis mantêm tutores e animais, mas só administração e recepção excluem.
+const DELETE_ROLES = ['administracao', 'recepcao'];
+const SEX_OPTIONS = ['Macho', 'Fêmea'];
 
 const TABS = [
   { value: 'tutores', label: 'Tutores', placeholder: 'Buscar por nome, CPF ou telefone' },
-  { value: 'animais', label: 'Animais', placeholder: 'Buscar animal ou tutor' },
+  { value: 'animais', label: 'Animais', placeholder: 'Buscar por nome, espécie, raça ou tutor' },
   { value: 'veterinarios', label: 'Veterinários', placeholder: 'Buscar veterinário' },
   { value: 'pagamentos', label: 'Pagamentos', placeholder: 'Buscar pagamento' },
 ];
@@ -32,7 +34,7 @@ export function Registros() {
   const [tab, setTab] = useState(TABS.some((item) => item.value === params.get('tab')) ? params.get('tab') : 'tutores');
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState(null);
-  const [deletingTutor, setDeletingTutor] = useState(null);
+  const [deleting, setDeleting] = useState(null);
   const [notice, setNotice] = useState(null);
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -49,7 +51,7 @@ export function Registros() {
   const paymentsList = (paymentsQuery.data || []).map((payment) => ({ ...payment, tutorName: payment.expand?.tutor?.name || '—' }));
   const activeQuery = { tutores: tutorsQuery, animais: animalsQuery, veterinarios: vetsQuery, pagamentos: paymentsQuery }[tab];
   const canEditVet = user?.role !== 'recepcao';
-  const canDeleteTutor = TUTOR_DELETE_ROLES.includes(user?.role);
+  const canDelete = DELETE_ROLES.includes(user?.role);
 
   const handleTabChange = (value) => {
     setTab(value);
@@ -57,7 +59,7 @@ export function Registros() {
   };
 
   const filteredTutors = tutors.filter((t) => matches(query, t.name, t.cpf, formatCpf(t.cpf), t.phone, formatPhone(t.phone), t.email, t.animals));
-  const filteredAnimals = animals.filter((a) => matches(query, a.name, a.species, a.breed, a.tutorName));
+  const filteredAnimals = animals.filter((a) => matches(query, a.name, a.species, a.breed, a.sex, a.tutorName));
   const filteredVets = veterinarians.filter((v) => matches(query, v.name, v.specialty, v.phone));
   const filteredPayments = paymentsList.filter((p) => matches(query, p.tutorName, p.status, formatDate(p.date)));
 
@@ -73,10 +75,14 @@ export function Registros() {
       { name: 'address', label: 'Endereço', type: 'textarea', maxLength: 300, autosize: true, minRows: 2 },
     ],
     animais: [
-      { name: 'name', label: 'Nome', required: true }, { name: 'species', label: 'Espécie', required: true },
-      { name: 'breed', label: 'Raça' }, { name: 'birthDate', label: 'Data de nascimento', type: 'date', max: dateKey() },
+      { name: 'name', label: 'Nome', required: true, maxLength: 200 },
+      { name: 'species', label: 'Espécie', required: true, maxLength: 80, placeholder: 'Ex.: Cão, Gato' },
+      { name: 'breed', label: 'Raça', maxLength: 200, placeholder: 'Ex.: SRD, Labrador' },
+      { name: 'sex', label: 'Sexo', type: 'select', required: true, data: SEX_OPTIONS },
+      { name: 'birthDate', label: 'Data de nascimento', type: 'date', max: dateKey(),
+        validate: (value) => value && value > dateKey() ? 'A data de nascimento não pode ser futura.' : null },
       { name: 'tutor', label: 'Tutor', type: 'select', required: true, data: tutorOptions },
-      { name: 'active', label: 'Ativo', type: 'checkbox' },
+      { name: 'active', label: 'Ativo', type: 'checkbox', description: 'Animais inativos não aparecem para agendamento; o histórico é mantido.' },
     ],
     veterinarios: [{ name: 'name', label: 'Nome', required: true }, { name: 'specialty', label: 'Especialidade' }, { name: 'phone', label: 'Telefone' }],
     pagamentos: [
@@ -144,8 +150,8 @@ export function Registros() {
                       <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: tutor })}>
                         Editar
                       </Button>
-                      {canDeleteTutor && (
-                        <Button size="xs" variant="light" color="red" onClick={() => setDeletingTutor(tutor)}>
+                      {canDelete && (
+                        <Button size="xs" variant="light" color="red" onClick={() => setDeleting({ tab, record: tutor })}>
                           Excluir
                         </Button>
                       )}
@@ -164,6 +170,7 @@ export function Registros() {
                 <Table.Th style={thStyle}>Nome</Table.Th>
                 <Table.Th style={thStyle}>Espécie</Table.Th>
                 <Table.Th style={thStyle}>Raça</Table.Th>
+                <Table.Th style={thStyle}>Sexo</Table.Th>
                 <Table.Th style={thStyle}>Idade</Table.Th>
                 <Table.Th style={thStyle}>Tutor</Table.Th>
                 <Table.Th />
@@ -172,15 +179,28 @@ export function Registros() {
             <Table.Tbody>
               {filteredAnimals.map((animal) => (
                 <Table.Tr key={animal.id}>
-                  <Table.Td fw={500}>{animal.name}</Table.Td>
+                  <Table.Td>
+                    <Group gap="xs" wrap="nowrap">
+                      <Text fw={500} size="sm">{animal.name}</Text>
+                      {!animal.active && <Badge color="gray" variant="light" size="sm">Inativo</Badge>}
+                    </Group>
+                  </Table.Td>
                   <Table.Td>{animal.species}</Table.Td>
-                  <Table.Td>{animal.breed}</Table.Td>
+                  <Table.Td>{animal.breed || '—'}</Table.Td>
+                  <Table.Td>{animal.sex || '—'}</Table.Td>
                   <Table.Td>{animal.age}</Table.Td>
                   <Table.Td>{animal.tutorName}</Table.Td>
                   <Table.Td>
-                    <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: animal })}>
-                      Editar
-                    </Button>
+                    <Group gap="xs" justify="flex-end" wrap="nowrap">
+                      <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: animal })}>
+                        Editar
+                      </Button>
+                      {canDelete && (
+                        <Button size="xs" variant="light" color="red" onClick={() => setDeleting({ tab, record: animal })}>
+                          Excluir
+                        </Button>
+                      )}
+                    </Group>
                   </Table.Td>
                 </Table.Tr>
               ))}
@@ -264,15 +284,31 @@ export function Registros() {
       {editing && <RecordForm key={`${editing.tab}-${editing.record?.id || 'new'}`}
         opened onClose={() => setEditing(null)} title={`${editing.record ? 'Editar' : 'Novo'} ${labels[editing.tab]}`}
         fields={fields[editing.tab]}
-        initialValues={{ name: '', phone: '', species: '', breed: '', birthDate: '', tutor: '', active: true,
+        initialValues={{ name: '', phone: '', species: '', breed: '', sex: '', birthDate: '', tutor: '', active: true,
           date: dateKey(), status: 'Pendente', specialty: '', cpf: '', email: '', address: '', ...editing.record,
           amount: editing.record ? (editing.record.amountCents || 0) / 100 : '',
           ...(editing.tab === 'tutores' && editing.record
             ? { cpf: formatCpf(editing.record.cpf), phone: formatPhone(editing.record.phone) } : {}),
         }}
         save={(data) => savers[editing.tab](editing.record?.id, data)} onSaved={() => setNotice('Registro salvo.')} />}
-      {deletingTutor && <TutorDeleteModal key={deletingTutor.id} tutor={deletingTutor}
-        onClose={() => setDeletingTutor(null)} onDeleted={() => setNotice(`Tutor "${deletingTutor.name}" excluído.`)} />}
+      {deleting?.tab === 'tutores' && <TutorDeleteModal key={deleting.record.id} tutor={deleting.record}
+        onClose={() => setDeleting(null)} onDeleted={() => setNotice(`Tutor "${deleting.record.name}" excluído.`)} />}
+      {deleting?.tab === 'animais' && <DeleteRecordModal key={deleting.record.id} title="Excluir animal"
+        remove={() => clinicService.deleteAnimal(deleting.record.id)}
+        deletedMessage={`Animal "${deleting.record.name}" excluído.`}
+        blockedMessage="Não foi possível excluir: o animal possui consultas ou registros clínicos. Inative o cadastro para preservar o histórico."
+        alternative={deleting.record.active ? {
+          label: 'Inativar', run: () => clinicService.setAnimalActive(deleting.record.id, false),
+          doneMessage: `Animal "${deleting.record.name}" inativado.`,
+        } : undefined}
+        onClose={() => setDeleting(null)} onDone={setNotice}>
+        Deseja excluir <Text span fw={700}>{deleting.record.name}</Text> ({deleting.record.species}, tutor {deleting.record.tutorName})?
+        Esta ação não pode ser desfeita.
+        <Text size="sm" c="dimmed" mt="xs">
+          Animais com consultas ou registros clínicos não podem ser excluídos. Nesse caso, use Inativar: o animal deixa de
+          aparecer no agendamento e o histórico continua disponível.
+        </Text>
+      </DeleteRecordModal>}
     </>
   );
 }

@@ -109,7 +109,7 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
     as(reception);
     tutor = await clinicService.saveTutor(null, { name: 'Tutor integração', cpf: '390.533.447-05', phone: '71999999999' });
     tutor = await clinicService.saveTutor(tutor.id, { ...tutor, name: 'Tutor atualizado', phone: '71988888888' });
-    animal = await clinicService.saveAnimal(null, { name: 'Animal integração', species: 'Cão', breed: 'SRD', birthDate: '2020-01-01', tutor: tutor.id, active: true });
+    animal = await clinicService.saveAnimal(null, { name: 'Animal integração', species: 'Cão', breed: 'SRD', sex: 'Macho', birthDate: '2020-01-01', tutor: tutor.id, active: true });
     animal = await clinicService.saveAnimal(animal.id, { ...animal, name: 'Animal atualizado' });
     const loaded = (await clinicService.animals()).find((record) => record.id === animal.id);
     assert.equal(loaded.expand.tutor.name, 'Tutor atualizado');
@@ -185,6 +185,57 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
     await clinicService.deleteTutor(byAdmin.id);
     await assert.rejects(() => anonymous.collection('tutors').delete(tutor.id), denied);
     assert.equal((await anonymous.collection('tutors').getList(1, 10)).totalItems, 0);
+  });
+
+  await t.test('REQ 05 — Animal exige sexo e tutor, normaliza textos e recusa nascimento futuro', async () => {
+    as(reception);
+    const base = { name: '  Thor ', species: ' Cão ', breed: ' Labrador   Retriever ', sex: 'Macho', birthDate: '', tutor: tutor.id, active: true };
+    const created = await clinicService.saveAnimal(null, base);
+    assert.deepEqual([created.name, created.species, created.breed, created.sex], ['Thor', 'Cão', 'Labrador Retriever', 'Macho']);
+    // A normalização também vale para clientes da API que não usam o serviço do frontend.
+    const raw = await reception.collection('animals').create({ name: ' Mel  ', species: 'Gato', sex: 'Fêmea', tutor: tutor.id, active: true });
+    assert.equal(raw.name, 'Mel');
+
+    const invalid = (field, code) => (error) => error.status === 400 && error.response?.data?.[field]?.code === code;
+    await assert.rejects(() => clinicService.saveAnimal(null, { ...base, sex: '' }), invalid('sex', 'validation_required'));
+    await assert.rejects(() => clinicService.saveAnimal(null, { ...base, sex: 'Outro' }), invalid('sex', 'validation_invalid_value'));
+    await assert.rejects(() => clinicService.saveAnimal(null, { ...base, tutor: '' }), invalid('tutor', 'validation_required'));
+    await assert.rejects(() => clinicService.saveAnimal(null, { ...base, species: '  ' }), invalid('species', 'validation_required'));
+    const future = await clinicService.saveAnimal(null, { ...base, birthDate: '2999-01-01' }).catch((error) => error);
+    assert.ok(invalid('birthDate', 'invalid_date')(future));
+    assert.equal(getErrorMessage(future), 'Data de nascimento: A data de nascimento não pode ser futura.');
+    const missingSex = await clinicService.saveAnimal(null, { ...base, sex: '' }).catch((error) => error);
+    assert.equal(getErrorMessage(missingSex), 'Sexo: preenchimento obrigatório.');
+    assert.equal((await clinicService.saveAnimal(created.id, { ...created, birthDate: today })).birthDate, today);
+    await clinicService.deleteAnimal(created.id);
+    await clinicService.deleteAnimal(raw.id);
+  });
+
+  await t.test('REQ 05 — Exclusão de animal respeita perfis e preserva animais com histórico', async () => {
+    as(vet);
+    // Veterinário consulta, cadastra e altera animais (CRU), mas não exclui.
+    let byVet = await clinicService.saveAnimal(null, { name: 'Pipoca', species: 'Gato', breed: '', sex: 'Fêmea', birthDate: '', tutor: tutor.id, active: true });
+    byVet = await clinicService.saveAnimal(byVet.id, { ...byVet, name: 'Pipoca editada' });
+    assert.equal(byVet.name, 'Pipoca editada');
+    await assert.rejects(() => clinicService.deleteAnimal(byVet.id), denied);
+    const vaccination = await clinicService.saveClinical('vaccinations', null, { animal: byVet.id, veterinarian: vet.authStore.record.id, date: today, name: 'V4', nextDate: '' });
+
+    as(reception);
+    // Com registro clínico vinculado, o PocketBase recusa a exclusão; o cadastro pode ser inativado.
+    const blocked = await clinicService.deleteAnimal(byVet.id).catch((error) => error);
+    assert.equal(blocked.status, 400);
+    assert.match(getErrorMessage(blocked, 'Animal com histórico.'), /Animal com histórico/);
+    assert.equal((await clinicService.setAnimalActive(byVet.id, false)).active, false);
+    assert.equal((await reception.collection('vaccinations').getOne(vaccination.id)).animal, byVet.id);
+
+    // Sem vínculos, recepção e administração excluem.
+    const free = await clinicService.saveAnimal(null, { name: 'Sem vínculo', species: 'Cão', sex: 'Macho', tutor: tutor.id, active: true });
+    await clinicService.deleteAnimal(free.id);
+    await assert.rejects(() => reception.collection('animals').getOne(free.id), (error) => error.status === 404);
+    as(admin);
+    const byAdmin = await clinicService.saveAnimal(null, { name: 'Temporário', species: 'Ave', sex: 'Macho', tutor: tutor.id, active: true });
+    await clinicService.deleteAnimal(byAdmin.id);
+    await assert.rejects(() => anonymous.collection('animals').delete(animal.id), denied);
   });
 
   await t.test('Veterinários vêm das contas reais; recepção só consulta e administração edita', async () => {
