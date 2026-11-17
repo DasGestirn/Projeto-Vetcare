@@ -15,7 +15,7 @@ import { clinicService } from '../src/services/clinicService.js';
 import { requireRole, guestLoader } from '../src/utils/authLoaders.js';
 import { dateKey, financialSummary, formatCpf, formatPhone, monthBounds, onlyDigits } from '../src/utils/format.js';
 import { getErrorMessage } from '../src/utils/pocketbaseErrors.js';
-import { isValidCpf, isValidPhone } from '../src/utils/validation.js';
+import { isValidCpf, isValidCrmv, isValidPhone, normalizeCrmv } from '../src/utils/validation.js';
 
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const executable = process.env.POCKETBASE_BIN || join(root, 'server', process.platform === 'win32' ? 'pocketbase.exe' : 'pocketbase');
@@ -238,13 +238,80 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
     await assert.rejects(() => anonymous.collection('animals').delete(animal.id), denied);
   });
 
-  await t.test('Veterinários vêm das contas reais; recepção só consulta e administração edita', async () => {
+  let paulo;
+  const pauloData = {
+    name: ' Dr. Paulo Reis ', email: ' Paulo.Reis@VetCare.com ', crmv: 'ba 01234', specialty: ' Dermatologia ',
+    phone: '(71) 98888-7777', password: 'paulo123456', passwordConfirm: 'paulo123456',
+  };
+
+  await t.test('REQ 06 — Administração cadastra veterinário com conta de acesso e CRMV único', async () => {
+    as(admin);
+    paulo = await clinicService.createVeterinarian(pauloData);
+    assert.deepEqual(
+      [paulo.name, paulo.email, paulo.role, paulo.crmv, paulo.specialty, paulo.phone],
+      ['Dr. Paulo Reis', 'paulo.reis@vetcare.com', 'veterinario', 'CRMV-BA 1234', 'Dermatologia', '71988887777'],
+    );
+    const independent = new PocketBase(url);
+    await independent.collection('users').authWithPassword('paulo.reis@vetcare.com', pauloData.password);
+    assert.equal(independent.authStore.record.role, 'veterinario');
+
+    const invalid = (field, code) => (error) => error.status === 400 && error.response?.data?.[field]?.code === code;
+    const other = { ...pauloData, email: 'outro.vet@vetcare.com' };
+    await assert.rejects(() => clinicService.createVeterinarian({ ...other, crmv: 'CRMV-XX 123' }), invalid('crmv', 'invalid_crmv'));
+    await assert.rejects(() => clinicService.createVeterinarian({ ...other, crmv: '1234567' }), invalid('crmv', 'invalid_crmv'));
+    await assert.rejects(() => clinicService.createVeterinarian({ ...other, crmv: 'SP 1', phone: '7199' }), invalid('phone', 'invalid_phone'));
+    const duplicate = await clinicService.createVeterinarian({ ...other, crmv: 'CRMV-BA 1234' }).catch((error) => error);
+    assert.ok(invalid('crmv', 'validation_not_unique')(duplicate));
+    assert.equal(getErrorMessage(duplicate), 'CRMV: já existe um registro com este valor.');
+    // A normalização também vale para clientes da API que não usam o serviço do frontend.
+    const raw = await admin.collection('users').create({ ...other, role: 'veterinario', crmv: '987/sp', phone: '(11) 3333-4444' });
+    assert.deepEqual([raw.crmv, raw.phone], ['CRMV-SP 987', '1133334444']);
+    await admin.collection('users').delete(raw.id);
+
+    // Recepção e veterinário não cadastram veterinários (RBAC: recepção R, veterinário RU).
+    for (const actor of [reception, vet]) {
+      as(actor);
+      await assert.rejects(() => clinicService.createVeterinarian({ ...other, crmv: 'SP 2' }), denied);
+    }
     as(reception);
-    assert.equal((await clinicService.veterinarians())[0].id, vet.authStore.record.id);
+    const listed = (await clinicService.veterinarians()).find((record) => record.id === paulo.id);
+    assert.deepEqual([listed.crmv, listed.specialty], ['CRMV-BA 1234', 'Dermatologia']);
+  });
+
+  await t.test('REQ 06 — Recepção só consulta; veterinário altera apenas os próprios dados e não o CRMV', async () => {
+    as(reception);
+    assert.ok((await clinicService.veterinarians()).some((record) => record.id === vet.authStore.record.id));
     await assert.rejects(() => clinicService.saveVeterinarian(vet.authStore.record.id, { name: 'Mudança indevida', specialty: '', phone: '' }), denied);
     as(admin);
-    const updated = await clinicService.saveVeterinarian(vet.authStore.record.id, { name: 'Dra. Emily', specialty: 'Clínica geral', phone: '71911111111' });
-    assert.equal(updated.specialty, 'Clínica geral');
+    const updated = await clinicService.saveVeterinarian(vet.authStore.record.id, { name: 'Dra. Emily', crmv: 'CRMV-BA 999', specialty: 'Clínica geral', phone: '71911111111' });
+    assert.deepEqual([updated.specialty, updated.crmv], ['Clínica geral', 'CRMV-BA 999']);
+    await assert.rejects(() => clinicService.saveVeterinarian(paulo.id, { ...paulo, crmv: 'BA 999' }), (error) => error.response?.data?.crmv?.code === 'validation_not_unique');
+
+    as(vet);
+    const own = await clinicService.saveVeterinarian(vet.authStore.record.id, { name: 'Dra. Emily', specialty: 'Cardiologia', phone: '(71) 3222-1111' });
+    assert.deepEqual([own.specialty, own.phone, own.crmv], ['Cardiologia', '7132221111', 'CRMV-BA 999']);
+    await assert.rejects(() => vet.collection('users').update(vet.authStore.record.id, { crmv: 'CRMV-BA 1000' }), denied);
+    await assert.rejects(() => clinicService.saveVeterinarian(paulo.id, { name: 'Edição indevida', specialty: '', phone: '' }), denied);
+    assert.equal((await admin.collection('users').getOne(paulo.id)).name, 'Dr. Paulo Reis');
+  });
+
+  await t.test('REQ 06 — Só a administração exclui veterinários, e quem tem histórico é preservado', async () => {
+    for (const actor of [reception, vet]) {
+      as(actor);
+      await assert.rejects(() => clinicService.deleteVeterinarian(paulo.id), denied);
+    }
+    const patient = await reception.collection('animals').create({ name: 'Paciente do Paulo', species: 'Cão', sex: 'Macho', tutor: tutor.id, active: true });
+    const pauloSession = new PocketBase(url);
+    await pauloSession.collection('users').authWithPassword('paulo.reis@vetcare.com', pauloData.password);
+    await pauloSession.collection('vaccinations').create({ animal: patient.id, veterinarian: paulo.id, date: today, name: 'Antirrábica' });
+
+    as(admin);
+    const blocked = await clinicService.deleteVeterinarian(paulo.id).catch((error) => error);
+    assert.equal(blocked.status, 400);
+    assert.ok(await admin.collection('users').getOne(paulo.id));
+    const temporary = await clinicService.createVeterinarian({ ...pauloData, email: 'temporario@vetcare.com', crmv: 'CRMV-SP 77' });
+    await clinicService.deleteVeterinarian(temporary.id);
+    await assert.rejects(() => admin.collection('users').getOne(temporary.id), (error) => error.status === 404);
   });
 
   await t.test('Agenda persiste, impede conflito concorrente e permite cancelar e reutilizar horário', async () => {
@@ -367,6 +434,15 @@ test('REQ 04 — Máscaras e validações de CPF e telefone no frontend', () => 
   assert.ok(isValidPhone('(71) 98765-4321'));
   assert.ok(isValidPhone('(71) 3333-4444'));
   for (const phone of ['(71) 8765-432', '(01) 98765-4321', '(71) 88765-4321', '']) assert.ok(!isValidPhone(phone), phone);
+});
+
+test('REQ 06 — Normalização e validação do CRMV no frontend', () => {
+  assert.equal(normalizeCrmv('crmv-ba 1234'), 'CRMV-BA 1234');
+  assert.equal(normalizeCrmv('BA 01234'), 'CRMV-BA 1234');
+  assert.equal(normalizeCrmv('1234/sp'), 'CRMV-SP 1234');
+  assert.equal(normalizeCrmv(' CRMV/RJ-56 '), 'CRMV-RJ 56');
+  for (const crmv of ['CRMV-BA 1234', 'sp 1', 'DF 123456']) assert.ok(isValidCrmv(crmv), crmv);
+  for (const crmv of ['CRMV-XX 1234', 'BA 1234567', 'BA', '1234', 'BA 0', '']) assert.ok(!isValidCrmv(crmv), crmv);
 });
 
 test('Datas locais e limites de mês não dependem de conversão UTC', () => {

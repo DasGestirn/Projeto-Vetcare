@@ -1,5 +1,6 @@
 import { pb } from '../pocketbase.js';
 import { onlyDigits } from '../utils/format.js';
+import { normalizeCrmv } from '../utils/validation.js';
 
 const list = (collection, options = {}) => pb.collection(collection).getFullList({ requestKey: null, ...options });
 const save = (collection, id, data) => id ? pb.collection(collection).update(id, data) : pb.collection(collection).create(data);
@@ -28,7 +29,18 @@ export const clinicService = {
   }),
   setAnimalActive: (id, active) => pb.collection('animals').update(id, { active }),
   deleteAnimal: (id) => pb.collection('animals').delete(id),
-  saveVeterinarian: (id, data) => save('users', id, { name: data.name.trim(), specialty: data.specialty.trim(), phone: data.phone.trim() }),
+  // REQ 06 — Veterinários são contas de `users` com perfil `veterinario`. O CRMV só é enviado quando
+  // informado: o próprio veterinário edita os demais dados, mas não altera o CRMV.
+  createVeterinarian: (data) => pb.collection('users').create({
+    name: data.name.trim(), email: data.email.trim().toLowerCase(), role: 'veterinario',
+    crmv: normalizeCrmv(data.crmv), specialty: (data.specialty || '').trim(), phone: onlyDigits(data.phone),
+    password: data.password, passwordConfirm: data.passwordConfirm, emailVisibility: true, verified: true,
+  }),
+  saveVeterinarian: (id, data) => save('users', id, {
+    name: data.name.trim(), specialty: (data.specialty || '').trim(), phone: onlyDigits(data.phone),
+    ...(data.crmv === undefined ? {} : { crmv: normalizeCrmv(data.crmv) }),
+  }),
+  deleteVeterinarian: (id) => pb.collection('users').delete(id),
   savePayment: (id, data) => save('payments', id, {
     tutor: data.tutor, date: data.date, amountCents: Math.round(Number(data.amount) * 100), status: data.status,
   }),

@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { Tabs, Paper, TextInput, Table, Button, Badge, Text, Group } from '@mantine/core';
 import { PageHeader } from '../../components/PageHeader/PageHeader';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useSearchParams } from 'react-router';
 import { useAuth } from '../../context/AuthContext';
 import { useClinicQuery } from '../../hooks/useClinic';
 import { clinicService } from '../../services/clinicService.js';
 import { QueryState } from '../../components/QueryState';
 import { RecordForm } from '../../components/RecordForm';
 import { animalAge, dateKey, formatCpf, formatDate, formatMoney, formatPhone } from '../../utils/format.js';
-import { isValidCpf, isValidPhone } from '../../utils/validation.js';
+import { isValidCpf, isValidCrmv, isValidPhone } from '../../utils/validation.js';
 import { DeleteRecordModal } from '../../components/DeleteRecordModal';
 import { TutorDeleteModal } from './TutorDeleteModal';
 
@@ -21,7 +21,7 @@ const SEX_OPTIONS = ['Macho', 'Fêmea'];
 const TABS = [
   { value: 'tutores', label: 'Tutores', placeholder: 'Buscar por nome, CPF ou telefone' },
   { value: 'animais', label: 'Animais', placeholder: 'Buscar por nome, espécie, raça ou tutor' },
-  { value: 'veterinarios', label: 'Veterinários', placeholder: 'Buscar veterinário' },
+  { value: 'veterinarios', label: 'Veterinários', placeholder: 'Buscar por nome, CRMV ou especialidade' },
   { value: 'pagamentos', label: 'Pagamentos', placeholder: 'Buscar pagamento' },
 ];
 
@@ -37,7 +37,6 @@ export function Registros() {
   const [deleting, setDeleting] = useState(null);
   const [notice, setNotice] = useState(null);
   const { user } = useAuth();
-  const navigate = useNavigate();
   const tutorsQuery = useClinicQuery(['tutors'], clinicService.tutors);
   const animalsQuery = useClinicQuery(['animals'], clinicService.animals);
   const vetsQuery = useClinicQuery(['veterinarians'], clinicService.veterinarians);
@@ -50,7 +49,9 @@ export function Registros() {
   const veterinarians = vetsQuery.data || [];
   const paymentsList = (paymentsQuery.data || []).map((payment) => ({ ...payment, tutorName: payment.expand?.tutor?.name || '—' }));
   const activeQuery = { tutores: tutorsQuery, animais: animalsQuery, veterinarios: vetsQuery, pagamentos: paymentsQuery }[tab];
-  const canEditVet = user?.role !== 'recepcao';
+  // REQ 06: administração mantém todos os veterinários; o veterinário altera apenas a própria conta.
+  const isAdmin = user?.role === 'administracao';
+  const canEditVet = (vet) => isAdmin || vet.id === user?.id;
   const canDelete = DELETE_ROLES.includes(user?.role);
 
   const handleTabChange = (value) => {
@@ -60,7 +61,7 @@ export function Registros() {
 
   const filteredTutors = tutors.filter((t) => matches(query, t.name, t.cpf, formatCpf(t.cpf), t.phone, formatPhone(t.phone), t.email, t.animals));
   const filteredAnimals = animals.filter((a) => matches(query, a.name, a.species, a.breed, a.sex, a.tutorName));
-  const filteredVets = veterinarians.filter((v) => matches(query, v.name, v.specialty, v.phone));
+  const filteredVets = veterinarians.filter((v) => matches(query, v.name, v.email, v.crmv, v.specialty, v.phone, formatPhone(v.phone)));
   const filteredPayments = paymentsList.filter((p) => matches(query, p.tutorName, p.status, formatDate(p.date)));
 
   const tutorOptions = tutors.map(({ id, name }) => ({ value: id, label: name }));
@@ -84,7 +85,6 @@ export function Registros() {
       { name: 'tutor', label: 'Tutor', type: 'select', required: true, data: tutorOptions },
       { name: 'active', label: 'Ativo', type: 'checkbox', description: 'Animais inativos não aparecem para agendamento; o histórico é mantido.' },
     ],
-    veterinarios: [{ name: 'name', label: 'Nome', required: true }, { name: 'specialty', label: 'Especialidade' }, { name: 'phone', label: 'Telefone' }],
     pagamentos: [
       { name: 'tutor', label: 'Tutor', type: 'select', required: true, data: tutorOptions },
       { name: 'date', label: 'Data', type: 'date', required: true },
@@ -92,8 +92,32 @@ export function Registros() {
       { name: 'status', label: 'Status', type: 'select', required: true, data: ['Pago', 'Pendente'] },
     ],
   };
+  // REQ 06: o cadastro cria a conta de acesso do veterinário; e-mail e senha só são pedidos na criação
+  // (depois são alterados na tela de Usuários). O CRMV é obrigatório no formulário e só a administração o altera.
+  const vetFields = (record) => [
+    { name: 'name', label: 'Nome completo', required: true, maxLength: 200 },
+    ...(record ? [] : [{ name: 'email', label: 'E-mail de acesso', type: 'email', required: true, placeholder: 'veterinario@vetcare.com' }]),
+    ...(isAdmin ? [{ name: 'crmv', label: 'CRMV', required: true, placeholder: 'CRMV-BA 1234',
+      validate: (value) => isValidCrmv(value) ? null : 'Informe o CRMV com a UF e o número (ex.: CRMV-BA 1234).' }] : []),
+    { name: 'specialty', label: 'Especialidade', maxLength: 120, placeholder: 'Ex.: Clínica geral' },
+    { name: 'phone', label: 'Telefone', placeholder: '(00) 00000-0000', inputMode: 'tel', format: formatPhone,
+      validate: (value) => !value || isValidPhone(value) ? null : 'Informe um telefone válido com DDD.' },
+    ...(record ? [] : [
+      { name: 'password', label: 'Senha inicial', type: 'password', required: true, autoComplete: 'new-password',
+        validate: (value) => value.length >= 8 ? null : 'A senha deve conter pelo menos 8 caracteres.' },
+      { name: 'passwordConfirm', label: 'Confirmar senha', type: 'password', required: true, autoComplete: 'new-password',
+        validate: (value, values) => value === values.password ? null : 'As senhas não coincidem.' },
+    ]),
+  ];
   const labels = { tutores: 'tutor', animais: 'animal', veterinarios: 'veterinário', pagamentos: 'pagamento' };
-  const savers = { tutores: clinicService.saveTutor, animais: clinicService.saveAnimal, veterinarios: clinicService.saveVeterinarian, pagamentos: clinicService.savePayment };
+  const savers = {
+    tutores: clinicService.saveTutor,
+    animais: clinicService.saveAnimal,
+    veterinarios: (id, data) => id
+      ? clinicService.saveVeterinarian(id, isAdmin ? data : { ...data, crmv: undefined })
+      : clinicService.createVeterinarian(data),
+    pagamentos: clinicService.savePayment,
+  };
 
   const activeTab = TABS.find((t) => t.value === tab);
 
@@ -101,8 +125,8 @@ export function Registros() {
     <>
       <PageHeader
         title="Registros"
-        actionLabel={tab === 'veterinarios' ? (user?.role === 'administracao' ? 'Novo veterinário' : undefined) : `Novo ${labels[tab]}`}
-        onAction={() => tab === 'veterinarios' ? navigate('/usuarios') : setEditing({ tab, record: null })}
+        actionLabel={tab === 'veterinarios' && !isAdmin ? undefined : `Novo ${labels[tab]}`}
+        onAction={() => setEditing({ tab, record: null })}
       />
 
       <Tabs value={tab} onChange={handleTabChange} mb="md">
@@ -213,6 +237,7 @@ export function Registros() {
             <Table.Thead>
               <Table.Tr>
                 <Table.Th style={thStyle}>Veterinário</Table.Th>
+                <Table.Th style={thStyle}>CRMV</Table.Th>
                 <Table.Th style={thStyle}>Especialidade</Table.Th>
                 <Table.Th style={thStyle}>Telefone</Table.Th>
                 <Table.Th />
@@ -221,13 +246,26 @@ export function Registros() {
             <Table.Tbody>
               {filteredVets.map((vet) => (
                 <Table.Tr key={vet.id}>
-                  <Table.Td fw={500}>{vet.name}</Table.Td>
-                  <Table.Td>{vet.specialty}</Table.Td>
-                  <Table.Td>{vet.phone}</Table.Td>
                   <Table.Td>
-                    {canEditVet && <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: vet })}>
-                      Editar
-                    </Button>}
+                    <Text fw={500} size="sm">{vet.name}</Text>
+                    {vet.email && <Text size="xs" c="dimmed">{vet.email}</Text>}
+                  </Table.Td>
+                  <Table.Td>{vet.crmv || '—'}</Table.Td>
+                  <Table.Td>{vet.specialty || '—'}</Table.Td>
+                  <Table.Td>{formatPhone(vet.phone) || '—'}</Table.Td>
+                  <Table.Td>
+                    <Group gap="xs" justify="flex-end" wrap="nowrap">
+                      {canEditVet(vet) && (
+                        <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: vet })}>
+                          Editar
+                        </Button>
+                      )}
+                      {isAdmin && (
+                        <Button size="xs" variant="light" color="red" onClick={() => setDeleting({ tab, record: vet })}>
+                          Excluir
+                        </Button>
+                      )}
+                    </Group>
                   </Table.Td>
                 </Table.Tr>
               ))}
@@ -283,12 +321,13 @@ export function Registros() {
       </Paper>
       {editing && <RecordForm key={`${editing.tab}-${editing.record?.id || 'new'}`}
         opened onClose={() => setEditing(null)} title={`${editing.record ? 'Editar' : 'Novo'} ${labels[editing.tab]}`}
-        fields={fields[editing.tab]}
+        fields={editing.tab === 'veterinarios' ? vetFields(editing.record) : fields[editing.tab]}
         initialValues={{ name: '', phone: '', species: '', breed: '', sex: '', birthDate: '', tutor: '', active: true,
-          date: dateKey(), status: 'Pendente', specialty: '', cpf: '', email: '', address: '', ...editing.record,
+          date: dateKey(), status: 'Pendente', specialty: '', cpf: '', email: '', address: '',
+          crmv: '', password: '', passwordConfirm: '', ...editing.record,
           amount: editing.record ? (editing.record.amountCents || 0) / 100 : '',
-          ...(editing.tab === 'tutores' && editing.record
-            ? { cpf: formatCpf(editing.record.cpf), phone: formatPhone(editing.record.phone) } : {}),
+          ...(editing.tab === 'tutores' && editing.record ? { cpf: formatCpf(editing.record.cpf) } : {}),
+          ...(['tutores', 'veterinarios'].includes(editing.tab) && editing.record ? { phone: formatPhone(editing.record.phone) } : {}),
         }}
         save={(data) => savers[editing.tab](editing.record?.id, data)} onSaved={() => setNotice('Registro salvo.')} />}
       {deleting?.tab === 'tutores' && <TutorDeleteModal key={deleting.record.id} tutor={deleting.record}
@@ -307,6 +346,17 @@ export function Registros() {
         <Text size="sm" c="dimmed" mt="xs">
           Animais com consultas ou registros clínicos não podem ser excluídos. Nesse caso, use Inativar: o animal deixa de
           aparecer no agendamento e o histórico continua disponível.
+        </Text>
+      </DeleteRecordModal>}
+      {deleting?.tab === 'veterinarios' && <DeleteRecordModal key={deleting.record.id} title="Excluir veterinário"
+        remove={() => clinicService.deleteVeterinarian(deleting.record.id)}
+        deletedMessage={`Veterinário "${deleting.record.name}" excluído.`}
+        blockedMessage="Não foi possível excluir: o veterinário possui consultas ou registros clínicos vinculados."
+        onClose={() => setDeleting(null)} onDone={setNotice}>
+        Deseja excluir <Text span fw={700}>{deleting.record.name}</Text>? A conta de acesso ao sistema também será removida.
+        Esta ação não pode ser desfeita.
+        <Text size="sm" c="dimmed" mt="xs">
+          Veterinários com consultas ou registros clínicos não podem ser excluídos, para preservar o histórico dos atendimentos.
         </Text>
       </DeleteRecordModal>}
     </>
