@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Tabs, Paper, TextInput, Table, Button, Badge, Text } from '@mantine/core';
+import { Tabs, Paper, TextInput, Table, Button, Badge, Text, Group } from '@mantine/core';
 import { PageHeader } from '../../components/PageHeader/PageHeader';
 import { useNavigate, useSearchParams } from 'react-router';
 import { useAuth } from '../../context/AuthContext';
@@ -7,12 +7,17 @@ import { useClinicQuery } from '../../hooks/useClinic';
 import { clinicService } from '../../services/clinicService.js';
 import { QueryState } from '../../components/QueryState';
 import { RecordForm } from '../../components/RecordForm';
-import { animalAge, dateKey, formatDate, formatMoney } from '../../utils/format.js';
+import { animalAge, dateKey, formatCpf, formatDate, formatMoney, formatPhone } from '../../utils/format.js';
+import { isValidCpf, isValidPhone } from '../../utils/validation.js';
+import { TutorDeleteModal } from './TutorDeleteModal';
 
 const thStyle = { fontSize: 13, fontWeight: 700, color: 'var(--vc-muted)' };
 
+// RBAC (docs/RBAC.md): os três perfis mantêm tutores, mas só administração e recepção excluem.
+const TUTOR_DELETE_ROLES = ['administracao', 'recepcao'];
+
 const TABS = [
-  { value: 'tutores', label: 'Tutores', placeholder: 'Buscar tutor ou animal' },
+  { value: 'tutores', label: 'Tutores', placeholder: 'Buscar por nome, CPF ou telefone' },
   { value: 'animais', label: 'Animais', placeholder: 'Buscar animal ou tutor' },
   { value: 'veterinarios', label: 'Veterinários', placeholder: 'Buscar veterinário' },
   { value: 'pagamentos', label: 'Pagamentos', placeholder: 'Buscar pagamento' },
@@ -27,35 +32,46 @@ export function Registros() {
   const [tab, setTab] = useState(TABS.some((item) => item.value === params.get('tab')) ? params.get('tab') : 'tutores');
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState(null);
-  const [saved, setSaved] = useState(false);
+  const [deletingTutor, setDeletingTutor] = useState(null);
+  const [notice, setNotice] = useState(null);
   const { user } = useAuth();
   const navigate = useNavigate();
   const tutorsQuery = useClinicQuery(['tutors'], clinicService.tutors);
   const animalsQuery = useClinicQuery(['animals'], clinicService.animals);
   const vetsQuery = useClinicQuery(['veterinarians'], clinicService.veterinarians);
   const paymentsQuery = useClinicQuery(['payments'], clinicService.payments);
-  const tutors = (tutorsQuery.data || []).map((tutor) => ({ ...tutor,
-    animals: (animalsQuery.data || []).filter((animal) => animal.tutor === tutor.id).map((animal) => animal.name).join(', ') || '—',
-  }));
+  const tutors = (tutorsQuery.data || []).map((tutor) => {
+    const animalNames = (animalsQuery.data || []).filter((animal) => animal.tutor === tutor.id).map((animal) => animal.name);
+    return { ...tutor, animalNames, animals: animalNames.join(', ') || '—' };
+  });
   const animals = (animalsQuery.data || []).map((animal) => ({ ...animal, tutorName: animal.expand?.tutor?.name || '—', age: animalAge(animal.birthDate) }));
   const veterinarians = vetsQuery.data || [];
   const paymentsList = (paymentsQuery.data || []).map((payment) => ({ ...payment, tutorName: payment.expand?.tutor?.name || '—' }));
   const activeQuery = { tutores: tutorsQuery, animais: animalsQuery, veterinarios: vetsQuery, pagamentos: paymentsQuery }[tab];
   const canEditVet = user?.role !== 'recepcao';
+  const canDeleteTutor = TUTOR_DELETE_ROLES.includes(user?.role);
 
   const handleTabChange = (value) => {
     setTab(value);
     setQuery('');
   };
 
-  const filteredTutors = tutors.filter((t) => matches(query, t.name, t.phone, t.animals));
+  const filteredTutors = tutors.filter((t) => matches(query, t.name, t.cpf, formatCpf(t.cpf), t.phone, formatPhone(t.phone), t.email, t.animals));
   const filteredAnimals = animals.filter((a) => matches(query, a.name, a.species, a.breed, a.tutorName));
   const filteredVets = veterinarians.filter((v) => matches(query, v.name, v.specialty, v.phone));
   const filteredPayments = paymentsList.filter((p) => matches(query, p.tutorName, p.status, formatDate(p.date)));
 
   const tutorOptions = tutors.map(({ id, name }) => ({ value: id, label: name }));
   const fields = {
-    tutores: [{ name: 'name', label: 'Nome', required: true }, { name: 'phone', label: 'Telefone' }],
+    tutores: [
+      { name: 'name', label: 'Nome completo', required: true, maxLength: 200 },
+      { name: 'cpf', label: 'CPF', required: true, placeholder: '000.000.000-00', inputMode: 'numeric', format: formatCpf,
+        validate: (value) => isValidCpf(value) ? null : 'Informe um CPF válido.' },
+      { name: 'phone', label: 'Telefone', required: true, placeholder: '(00) 00000-0000', inputMode: 'tel', format: formatPhone,
+        validate: (value) => isValidPhone(value) ? null : 'Informe um telefone válido com DDD.' },
+      { name: 'email', label: 'E-mail', type: 'email', placeholder: 'tutor@exemplo.com' },
+      { name: 'address', label: 'Endereço', type: 'textarea', maxLength: 300, autosize: true, minRows: 2 },
+    ],
     animais: [
       { name: 'name', label: 'Nome', required: true }, { name: 'species', label: 'Espécie', required: true },
       { name: 'breed', label: 'Raça' }, { name: 'birthDate', label: 'Data de nascimento', type: 'date', max: dateKey() },
@@ -92,7 +108,7 @@ export function Registros() {
       </Tabs>
 
       <Paper withBorder p="lg">
-        {saved && <Text c="teal" mb="md" role="status">Registro salvo.</Text>}
+        {notice && <Text c="teal" mb="md" role="status">{notice}</Text>}
         <TextInput
           placeholder={activeTab.placeholder}
           value={query}
@@ -107,6 +123,7 @@ export function Registros() {
             <Table.Thead>
               <Table.Tr>
                 <Table.Th style={thStyle}>Tutor</Table.Th>
+                <Table.Th style={thStyle}>CPF</Table.Th>
                 <Table.Th style={thStyle}>Telefone</Table.Th>
                 <Table.Th style={thStyle}>Animais</Table.Th>
                 <Table.Th />
@@ -115,13 +132,24 @@ export function Registros() {
             <Table.Tbody>
               {filteredTutors.map((tutor) => (
                 <Table.Tr key={tutor.id}>
-                  <Table.Td fw={500}>{tutor.name}</Table.Td>
-                  <Table.Td>{tutor.phone}</Table.Td>
+                  <Table.Td>
+                    <Text fw={500} size="sm">{tutor.name}</Text>
+                    {tutor.email && <Text size="xs" c="dimmed">{tutor.email}</Text>}
+                  </Table.Td>
+                  <Table.Td>{formatCpf(tutor.cpf) || '—'}</Table.Td>
+                  <Table.Td>{formatPhone(tutor.phone) || '—'}</Table.Td>
                   <Table.Td><Badge variant="light">{tutor.animals}</Badge></Table.Td>
                   <Table.Td>
-                    <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: tutor })}>
-                      Editar
-                    </Button>
+                    <Group gap="xs" justify="flex-end" wrap="nowrap">
+                      <Button size="xs" variant="default" onClick={() => setEditing({ tab, record: tutor })}>
+                        Editar
+                      </Button>
+                      {canDeleteTutor && (
+                        <Button size="xs" variant="light" color="red" onClick={() => setDeletingTutor(tutor)}>
+                          Excluir
+                        </Button>
+                      )}
+                    </Group>
                   </Table.Td>
                 </Table.Tr>
               ))}
@@ -237,10 +265,14 @@ export function Registros() {
         opened onClose={() => setEditing(null)} title={`${editing.record ? 'Editar' : 'Novo'} ${labels[editing.tab]}`}
         fields={fields[editing.tab]}
         initialValues={{ name: '', phone: '', species: '', breed: '', birthDate: '', tutor: '', active: true,
-          date: dateKey(), status: 'Pendente', specialty: '', ...editing.record,
+          date: dateKey(), status: 'Pendente', specialty: '', cpf: '', email: '', address: '', ...editing.record,
           amount: editing.record ? (editing.record.amountCents || 0) / 100 : '',
+          ...(editing.tab === 'tutores' && editing.record
+            ? { cpf: formatCpf(editing.record.cpf), phone: formatPhone(editing.record.phone) } : {}),
         }}
-        save={(data) => savers[editing.tab](editing.record?.id, data)} onSaved={() => setSaved(true)} />}
+        save={(data) => savers[editing.tab](editing.record?.id, data)} onSaved={() => setNotice('Registro salvo.')} />}
+      {deletingTutor && <TutorDeleteModal key={deletingTutor.id} tutor={deletingTutor}
+        onClose={() => setDeletingTutor(null)} onDeleted={() => setNotice(`Tutor "${deletingTutor.name}" excluído.`)} />}
     </>
   );
 }

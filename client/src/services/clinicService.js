@@ -1,4 +1,5 @@
 import { pb } from '../pocketbase.js';
+import { onlyDigits } from '../utils/format.js';
 
 const list = (collection, options = {}) => pb.collection(collection).getFullList({ requestKey: null, ...options });
 const save = (collection, id, data) => id ? pb.collection(collection).update(id, data) : pb.collection(collection).create(data);
@@ -16,7 +17,11 @@ export const clinicService = {
     filter: pb.filter('animal = {:animal}', { animal }), sort: '-date,-created', expand: 'veterinarian', ...options,
   }),
   visits: (options) => list('medical_records', { fields: 'id,date', ...options }),
-  saveTutor: (id, data) => save('tutors', id, { name: data.name.trim(), phone: data.phone.trim() }),
+  saveTutor: (id, data) => save('tutors', id, {
+    name: data.name.trim(), cpf: onlyDigits(data.cpf), phone: onlyDigits(data.phone),
+    email: (data.email || '').trim().toLowerCase(), address: (data.address || '').trim(),
+  }),
+  deleteTutor: (id) => pb.collection('tutors').delete(id),
   saveAnimal: (id, data) => save('animals', id, {
     name: data.name.trim(), species: data.species.trim(), breed: data.breed.trim(),
     birthDate: data.birthDate || '', tutor: data.tutor, active: data.active,

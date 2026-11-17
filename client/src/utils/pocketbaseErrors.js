@@ -2,7 +2,7 @@ const FIELD_LABELS = {
   name: 'Nome', email: 'E-mail', role: 'Perfil', password: 'Senha', passwordConfirm: 'Confirmação de senha',
   tutor: 'Tutor', animal: 'Animal', veterinarian: 'Veterinário', date: 'Data', time: 'Horário',
   amountCents: 'Valor', phone: 'Telefone', title: 'Título', notes: 'Observações', instructions: 'Prescrição',
-  nextDate: 'Próxima dose', birthDate: 'Data de nascimento',
+  nextDate: 'Próxima dose', birthDate: 'Data de nascimento', cpf: 'CPF', address: 'Endereço',
 };
 
 export function getErrorMessage(error, fallback = 'Não foi possível concluir a operação.') {
