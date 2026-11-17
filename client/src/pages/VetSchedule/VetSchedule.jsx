@@ -68,6 +68,13 @@ function formatMonthLabel(date) {
   return `${capitalize(MONTH_NAMES[date.getMonth()])} ${date.getFullYear()}`;
 }
 
+// REQ 07 — Horários passados não podem ser agendados (o backend aplica a mesma regra).
+function isPastSlot(day, time, now = new Date()) {
+  const today = toKey(now);
+  const current = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  return day < today || (day === today && time <= current);
+}
+
 function countAppointments(schedule, date) {
   const dayEntries = schedule[toKey(date)] || {};
   return Object.values(dayEntries).filter((entry) => !entry.canceled).length;
@@ -91,13 +98,15 @@ export function VetSchedule() {
   const appointmentsQuery = useClinicQuery(['appointments', start, end], (options) => clinicService.appointments(start, end, options));
   const vets = vetsQuery.data || [];
   const animals = animalsQuery.data || [];
+  // REQ 05/07: animais inativos continuam no histórico, mas não aparecem para novos agendamentos.
+  const activeAnimals = animals.filter((animal) => animal.active);
   const schedule = useMemo(() => {
     const result = {};
     for (const record of appointmentsQuery.data || []) {
       const animal = record.expand?.animal;
       const entry = { ...record, canceled: record.status === 'Cancelada',
         text: [animal?.name, animal?.species].filter(Boolean).join(' · '),
-        sub: [animal?.expand?.tutor?.name, record.type].filter(Boolean).join(' · '),
+        sub: [record.expand?.tutor?.name || animal?.expand?.tutor?.name, record.type].filter(Boolean).join(' · '),
       };
       const slot = `${record.time}-${record.veterinarian}`;
       result[record.date] ||= {};
@@ -123,6 +132,7 @@ export function VetSchedule() {
       setCancelTarget({ appt, veterinarian });
       openCancel();
     } else {
+      if (isPastSlot(toKey(date), time)) return;
       setScheduleTarget({ date, time, veterinarian });
       setScheduleForm({ animal: appt?.animal || '', type: appt?.type || '', date: toKey(date), time, veterinarian: veterinarian.id });
       openSchedule();
@@ -131,7 +141,9 @@ export function VetSchedule() {
   const newAppointment = () => {
     setFormError(null);
     setScheduleTarget({});
-    setScheduleForm({ animal: '', type: '', date: toKey(currentDate), time: times[0], veterinarian: vets[0]?.id || '' });
+    const date = toKey(currentDate) < toKey(new Date()) ? toKey(new Date()) : toKey(currentDate);
+    const time = times.find((slot) => !isPastSlot(date, slot)) || times[0];
+    setScheduleForm({ animal: '', type: '', date, time, veterinarian: vets[0]?.id || '' });
     openSchedule();
   };
   const confirmCancel = async () => {
@@ -150,8 +162,13 @@ export function VetSchedule() {
     if (lock.current) return;
     lock.current = true;
     setFormError(null);
+    if (isPastSlot(scheduleForm.date, scheduleForm.time)) {
+      setFormError('Escolha uma data e um horário futuros.');
+      lock.current = false;
+      return;
+    }
     try {
-      await scheduleMutation.mutateAsync({ ...scheduleForm, type: scheduleForm.type.trim() });
+      await scheduleMutation.mutateAsync(scheduleForm);
       setCurrentDate(new Date(`${scheduleForm.date}T12:00:00`));
       closeSchedule();
       setFeedback('Atendimento agendado.');
@@ -162,7 +179,7 @@ export function VetSchedule() {
 
   return (
     <>
-      <PageHeader title="Agenda" actionLabel="Nova consulta" onAction={newAppointment} actionDisabled={unavailable || busy || !vets.length || !animals.length} />
+      <PageHeader title="Agenda" actionLabel="Nova consulta" onAction={newAppointment} actionDisabled={unavailable || busy || !vets.length || !activeAnimals.length} />
       <Group mb="md" gap="xs">
         <Button variant="default" onClick={goPrevious}>Anterior</Button>
         <Text fw={600} px="xs">{periodLabel}</Text>
@@ -173,10 +190,10 @@ export function VetSchedule() {
       {feedback && <Text c="teal" mb="md" role="status">{feedback}</Text>}
       <Paper withBorder p="lg">
         <QueryState query={vetsQuery} empty={vets.length === 0} emptyMessage="Nenhum veterinário cadastrado. Cadastre um usuário com esse perfil." />
-        <QueryState query={animalsQuery} empty={animals.length === 0} emptyMessage="Cadastre os animais em Registros antes de agendar." />
+        <QueryState query={animalsQuery} empty={activeAnimals.length === 0} emptyMessage="Nenhum animal ativo. Cadastre ou reative os animais em Registros antes de agendar." />
         <QueryState query={appointmentsQuery} />
         {!unavailable && vets.length > 0 && <>
-          {view === 'Dia' && <DayView date={currentDate} vets={vets} dayAppointments={schedule[toKey(currentDate)] || {}} onSlotClick={handleSlotClick} disabled={busy || !animals.length} />}
+          {view === 'Dia' && <DayView date={currentDate} vets={vets} dayAppointments={schedule[toKey(currentDate)] || {}} onSlotClick={handleSlotClick} disabled={busy || !activeAnimals.length} />}
           {view === 'Semana' && <WeekView date={currentDate} schedule={schedule} onSelectDay={goToDay} />}
           {view === 'Mês' && <MonthView date={currentDate} schedule={schedule} onSelectDay={goToDay} />}
         </>}
@@ -197,12 +214,15 @@ export function VetSchedule() {
           {scheduleTarget.veterinarian ? <Text size="sm" c="dimmed">{scheduleTarget.veterinarian.name} · {scheduleForm.time} · {formatDayLabel(scheduleTarget.date)}</Text> : <>
             <Select label="Veterinário" required allowDeselect={false} data={vets.map((vet) => ({ value: vet.id, label: vet.name }))} value={scheduleForm.veterinarian} onChange={(value) => setField('veterinarian', value)} disabled={busy} />
             <Group grow>
-              <TextInput type="date" label="Data" required value={scheduleForm.date} onChange={(event) => setField('date', event.currentTarget.value)} disabled={busy} />
-              <Select label="Horário" required allowDeselect={false} data={times} value={scheduleForm.time} onChange={(value) => setField('time', value)} disabled={busy} />
+              <TextInput type="date" label="Data" required min={toKey(new Date())} value={scheduleForm.date} onChange={(event) => setField('date', event.currentTarget.value)} disabled={busy} />
+              <Select label="Horário" required allowDeselect={false} value={scheduleForm.time} onChange={(value) => setField('time', value)} disabled={busy}
+                data={times.map((time) => ({ value: time, label: time, disabled: isPastSlot(scheduleForm.date, time) }))} />
             </Group>
           </>}
           <Group grow>
-            <Select label="Animal" searchable required allowDeselect={false} data={animals.map((animal) => ({ value: animal.id, label: `${animal.name} · ${animal.expand?.tutor?.name || '—'}` }))} value={scheduleForm.animal || null} onChange={(value) => setField('animal', value)} disabled={busy} />
+            <Select label="Animal" searchable required allowDeselect={false} placeholder="Busque por animal ou tutor"
+              data={activeAnimals.map((animal) => ({ value: animal.id, label: `${animal.name} · ${animal.expand?.tutor?.name || '—'}` }))}
+              value={activeAnimals.some((animal) => animal.id === scheduleForm.animal) ? scheduleForm.animal : null} onChange={(value) => setField('animal', value)} disabled={busy} />
             <TextInput label="Espécie" value={selectedAnimal?.species || ''} readOnly />
           </Group>
           <Group grow>
@@ -220,6 +240,7 @@ export function VetSchedule() {
 }
 
 function DayView({ date, vets, dayAppointments, onSlotClick, disabled }) {
+  const now = new Date();
   return (
     <div className={classes.calendar} style={{ gridTemplateColumns: `90px repeat(${vets.length}, minmax(140px, 1fr))`, overflowX: 'auto' }}>
       <div />
@@ -229,8 +250,11 @@ function DayView({ date, vets, dayAppointments, onSlotClick, disabled }) {
         {vets.map((vet) => {
           const appt = dayAppointments[`${time}-${vet.id}`];
           const className = appt ? (appt.canceled ? classes.cancel : classes.appointment) : classes.free;
-          return <button key={vet.id} type="button" disabled={disabled} className={className} onClick={() => onSlotClick(date, time, vet, appt)}>
-            {appt ? <div><Text size="sm" fw={600}>{appt.text}</Text><Text size="xs">{appt.sub}</Text>{appt.canceled && <Badge color="orange" size="xs" mt={4}>Cancelada</Badge>}</div> : <Text size="sm" c="dimmed">Horário livre</Text>}
+          // Horário passado sem consulta ativa não pode ser agendado; consultas ativas ainda podem ser canceladas.
+          const closed = (!appt || appt.canceled) && isPastSlot(toKey(date), time, now);
+          return <button key={vet.id} type="button" disabled={disabled || closed} className={className} onClick={() => onSlotClick(date, time, vet, appt)}>
+            {appt ? <div><Text size="sm" fw={600}>{appt.text}</Text><Text size="xs">{appt.sub}</Text>{appt.canceled && <Badge color="orange" size="xs" mt={4}>Cancelada</Badge>}</div>
+              : <Text size="sm" c="dimmed">{closed ? 'Horário encerrado' : 'Horário livre'}</Text>}
           </button>;
         })}
       </Fragment>)}

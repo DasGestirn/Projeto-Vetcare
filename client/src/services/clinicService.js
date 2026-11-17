@@ -12,7 +12,7 @@ export const clinicService = {
   payments: (options) => list('payments', { sort: '-date,-created', expand: 'tutor', ...options }),
   appointments: (start, end, options) => list('appointments', {
     filter: pb.filter('date >= {:start} && date <= {:end}', { start, end }),
-    sort: 'date,time,created', expand: 'animal,animal.tutor,veterinarian', ...options,
+    sort: 'date,time,created', expand: 'animal,animal.tutor,tutor,veterinarian', ...options,
   }),
   clinical: (collection, animal, options) => list(collection, {
     filter: pb.filter('animal = {:animal}', { animal }), sort: '-date,-created', expand: 'veterinarian', ...options,
@@ -44,7 +44,11 @@ export const clinicService = {
   savePayment: (id, data) => save('payments', id, {
     tutor: data.tutor, date: data.date, amountCents: Math.round(Number(data.amount) * 100), status: data.status,
   }),
-  schedule: (data) => pb.collection('appointments').create({ ...data, status: 'Agendada' }),
+  // REQ 07 — O tutor da consulta é preenchido pelo backend a partir do animal.
+  schedule: (data) => pb.collection('appointments').create({
+    animal: data.animal, veterinarian: data.veterinarian, date: data.date, time: data.time,
+    type: (data.type || '').trim(), status: 'Agendada',
+  }),
   cancel: (id) => pb.collection('appointments').update(id, { status: 'Cancelada' }),
   saveClinical: (collection, id, data) => save(collection, id, data),
 };

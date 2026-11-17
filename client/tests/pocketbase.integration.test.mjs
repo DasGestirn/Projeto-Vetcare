@@ -68,6 +68,14 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
   const denied = (error) => [400, 403, 404].includes(error.status);
   let tutor, animal, payment, visit, vaccine, prescription;
   const today = dateKey();
+  const shiftDays = (days) => {
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+    return dateKey(date);
+  };
+  // O backend usa o horário da clínica (UTC−3). Amanhã e dois dias atrás são futuro e passado em qualquer fuso.
+  const tomorrow = shiftDays(1);
+  const past = shiftDays(-2);
 
   await t.test('Instalação limpa preserva três contas e atribui os perfis corretos', async () => {
     const users = await admin.collection('users').getFullList();
@@ -316,17 +324,70 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
 
   await t.test('Agenda persiste, impede conflito concorrente e permite cancelar e reutilizar horário', async () => {
     as(reception);
-    const payload = { animal: animal.id, veterinarian: vet.authStore.record.id, date: today, time: '09:00', type: 'Consulta' };
+    const payload = { animal: animal.id, veterinarian: vet.authStore.record.id, date: tomorrow, time: '09:00', type: 'Consulta' };
     const attempts = await Promise.allSettled([clinicService.schedule(payload), clinicService.schedule(payload)]);
     assert.equal(attempts.filter((result) => result.status === 'fulfilled').length, 1);
     const appointment = attempts.find((result) => result.status === 'fulfilled').value;
-    const loaded = (await clinicService.appointments(today, today)).find((record) => record.id === appointment.id);
+    const loaded = (await clinicService.appointments(tomorrow, tomorrow)).find((record) => record.id === appointment.id);
     assert.equal(loaded.expand.animal.expand.tutor.id, tutor.id);
     await assert.rejects(() => reception.collection('appointments').update(appointment.id, { status: 'Cancelada', time: '10:00' }), denied);
     await clinicService.cancel(appointment.id);
     assert.equal((await reception.collection('appointments').getOne(appointment.id)).status, 'Cancelada');
     await clinicService.schedule(payload);
-    assert.equal((await clinicService.appointments(today, today)).filter((record) => record.status === 'Agendada').length, 1);
+    assert.equal((await clinicService.appointments(tomorrow, tomorrow)).filter((record) => record.status === 'Agendada').length, 1);
+  });
+
+  await t.test('REQ 07 — Consulta relaciona animal, tutor, veterinário, data e horário', async () => {
+    as(reception);
+    const otherTutor = await clinicService.saveTutor(null, { name: 'Outro tutor', cpf: '52998224725', phone: '71912345678' });
+    const bidu = await clinicService.saveAnimal(null, { name: 'Bidu', species: 'Cão', sex: 'Macho', tutor: tutor.id, active: true });
+    const appointment = await clinicService.schedule({ animal: bidu.id, veterinarian: paulo.id, date: tomorrow, time: '11:00', type: '  Retorno   pós-cirúrgico ' });
+    assert.deepEqual([appointment.tutor, appointment.type, appointment.status], [tutor.id, 'Retorno pós-cirúrgico', 'Agendada']);
+    const loaded = (await clinicService.appointments(tomorrow, tomorrow)).find((record) => record.id === appointment.id);
+    assert.deepEqual([loaded.expand.tutor.name, loaded.expand.animal.name, loaded.expand.veterinarian.name], ['Tutor atualizado', 'Bidu', 'Dr. Paulo Reis']);
+
+    // O tutor vem sempre do animal, mesmo que outro cliente da API informe um tutor diferente.
+    const raw = await reception.collection('appointments').create({ animal: bidu.id, tutor: otherTutor.id, veterinarian: vet.authStore.record.id, date: tomorrow, time: '15:00', type: 'Consulta', status: 'Agendada' });
+    assert.equal(raw.tutor, tutor.id);
+    // O cancelamento não altera o tutor, e o histórico mantém o tutor da época se o animal mudar de tutor.
+    await assert.rejects(() => reception.collection('appointments').update(raw.id, { status: 'Cancelada', tutor: otherTutor.id }), denied);
+    await clinicService.cancel(raw.id);
+    await clinicService.saveAnimal(bidu.id, { ...bidu, tutor: otherTutor.id });
+    assert.equal((await reception.collection('appointments').getOne(appointment.id)).tutor, tutor.id);
+    const next = await clinicService.schedule({ animal: bidu.id, veterinarian: paulo.id, date: tomorrow, time: '16:00', type: 'Consulta' });
+    assert.equal(next.tutor, otherTutor.id);
+    // O tutor com consultas registradas continua protegido contra exclusão.
+    await assert.rejects(() => clinicService.deleteTutor(tutor.id), (error) => error.status === 400);
+  });
+
+  await t.test('REQ 07 — Agendamento recusa data passada, animal inativo, conflitos e quem não é veterinário', async () => {
+    as(reception);
+    const invalid = (field, code) => (error) => error.status === 400 && error.response?.data?.[field]?.code === code;
+    const base = { animal: animal.id, veterinarian: paulo.id, date: tomorrow, time: '14:00', type: 'Consulta' };
+
+    const pastDate = await clinicService.schedule({ ...base, date: past }).catch((error) => error);
+    assert.ok(invalid('date', 'past_date')(pastDate));
+    assert.equal(getErrorMessage(pastDate), 'Data: Não é possível agendar em uma data passada.');
+
+    const inactive = await clinicService.saveAnimal(null, { name: 'Inativo', species: 'Gato', sex: 'Fêmea', tutor: tutor.id, active: false });
+    await assert.rejects(() => clinicService.schedule({ ...base, animal: inactive.id }), invalid('animal', 'inactive_animal'));
+
+    await clinicService.schedule(base);
+    const luna = await clinicService.saveAnimal(null, { name: 'Luna', species: 'Gata', sex: 'Fêmea', tutor: tutor.id, active: true });
+    const vetBusy = await clinicService.schedule({ ...base, animal: luna.id }).catch((error) => error);
+    assert.ok(invalid('veterinarian', 'slot_taken')(vetBusy));
+    assert.equal(getErrorMessage(vetBusy), 'Veterinário: Já possui consulta agendada neste horário.');
+    const animalBusy = await clinicService.schedule({ ...base, veterinarian: vet.authStore.record.id }).catch((error) => error);
+    assert.ok(invalid('animal', 'animal_busy')(animalBusy));
+    assert.equal(getErrorMessage(animalBusy), 'Animal: Já possui consulta agendada neste horário.');
+
+    // O índice único também barra o mesmo animal em dois veterinários ao mesmo tempo.
+    const attempts = await Promise.allSettled([paulo.id, vet.authStore.record.id].map((veterinarian) => clinicService.schedule({ ...base, time: '17:00', veterinarian })));
+    assert.equal(attempts.filter((result) => result.status === 'fulfilled').length, 1);
+
+    await assert.rejects(() => clinicService.schedule({ ...base, time: '10:00', veterinarian: admin.authStore.record.id }), denied);
+    await assert.rejects(() => clinicService.schedule({ ...base, time: '12:30' }), invalid('time', 'validation_invalid_format'));
+    await assert.rejects(() => anonymous.collection('appointments').create({ ...base, time: '16:00', status: 'Agendada' }), denied);
   });
 
   await t.test('Atendimentos, vacinas e prescrições reais respeitam os perfis de leitura e escrita', async () => {
@@ -406,6 +467,7 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
   });
 
   await t.test('Dados sobrevivem ao reinício completo do backend', async () => {
+    const appointments = (await admin.collection('appointments').getFullList()).length;
     await stop();
     await start();
     const independent = new PocketBase(url);
@@ -416,7 +478,7 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
     assert.equal((await independent.collection('medical_records').getOne(visit.id)).title, 'Consulta');
     assert.equal((await independent.collection('vaccinations').getOne(vaccine.id)).name, 'Vacina atualizada');
     assert.equal((await independent.collection('prescriptions').getOne(prescription.id)).active, false);
-    assert.equal((await independent.collection('appointments').getFullList()).length, 2);
+    assert.equal((await independent.collection('appointments').getFullList()).length, appointments);
   });
 });
 
