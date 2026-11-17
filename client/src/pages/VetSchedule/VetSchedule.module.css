@@ -29,6 +29,12 @@
   &:hover {
     filter: brightness(0.96);
   }
+
+  &:disabled {
+    cursor: not-allowed;
+    filter: none;
+    opacity: 0.6;
+  }
 }
 
 .appointment {

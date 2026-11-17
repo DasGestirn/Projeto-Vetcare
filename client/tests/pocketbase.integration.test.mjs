@@ -15,7 +15,7 @@ import { clinicService } from '../src/services/clinicService.js';
 import { requireRole, guestLoader } from '../src/utils/authLoaders.js';
 import { dateKey, financialSummary, formatCpf, formatPhone, monthBounds, onlyDigits } from '../src/utils/format.js';
 import { getErrorMessage } from '../src/utils/pocketbaseErrors.js';
-import { isValidCpf, isValidPhone } from '../src/utils/validation.js';
+import { isValidCpf, isValidCrmv, isValidPhone, normalizeCrmv } from '../src/utils/validation.js';
 
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const executable = process.env.POCKETBASE_BIN || join(root, 'server', process.platform === 'win32' ? 'pocketbase.exe' : 'pocketbase');
@@ -68,6 +68,14 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
   const denied = (error) => [400, 403, 404].includes(error.status);
   let tutor, animal, payment, visit, vaccine, prescription;
   const today = dateKey();
+  const shiftDays = (days) => {
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+    return dateKey(date);
+  };
+  // O backend usa o horário da clínica (UTC−3). Amanhã e dois dias atrás são futuro e passado em qualquer fuso.
+  const tomorrow = shiftDays(1);
+  const past = shiftDays(-2);
 
   await t.test('Instalação limpa preserva três contas e atribui os perfis corretos', async () => {
     const users = await admin.collection('users').getFullList();
@@ -109,7 +117,7 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
     as(reception);
     tutor = await clinicService.saveTutor(null, { name: 'Tutor integração', cpf: '390.533.447-05', phone: '71999999999' });
     tutor = await clinicService.saveTutor(tutor.id, { ...tutor, name: 'Tutor atualizado', phone: '71988888888' });
-    animal = await clinicService.saveAnimal(null, { name: 'Animal integração', species: 'Cão', breed: 'SRD', birthDate: '2020-01-01', tutor: tutor.id, active: true });
+    animal = await clinicService.saveAnimal(null, { name: 'Animal integração', species: 'Cão', breed: 'SRD', sex: 'Macho', birthDate: '2020-01-01', tutor: tutor.id, active: true });
     animal = await clinicService.saveAnimal(animal.id, { ...animal, name: 'Animal atualizado' });
     const loaded = (await clinicService.animals()).find((record) => record.id === animal.id);
     assert.equal(loaded.expand.tutor.name, 'Tutor atualizado');
@@ -187,28 +195,199 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
     assert.equal((await anonymous.collection('tutors').getList(1, 10)).totalItems, 0);
   });
 
-  await t.test('Veterinários vêm das contas reais; recepção só consulta e administração edita', async () => {
+  await t.test('REQ 05 — Animal exige sexo e tutor, normaliza textos e recusa nascimento futuro', async () => {
     as(reception);
-    assert.equal((await clinicService.veterinarians())[0].id, vet.authStore.record.id);
+    const base = { name: '  Thor ', species: ' Cão ', breed: ' Labrador   Retriever ', sex: 'Macho', birthDate: '', tutor: tutor.id, active: true };
+    const created = await clinicService.saveAnimal(null, base);
+    assert.deepEqual([created.name, created.species, created.breed, created.sex], ['Thor', 'Cão', 'Labrador Retriever', 'Macho']);
+    // A normalização também vale para clientes da API que não usam o serviço do frontend.
+    const raw = await reception.collection('animals').create({ name: ' Mel  ', species: 'Gato', sex: 'Fêmea', tutor: tutor.id, active: true });
+    assert.equal(raw.name, 'Mel');
+
+    const invalid = (field, code) => (error) => error.status === 400 && error.response?.data?.[field]?.code === code;
+    await assert.rejects(() => clinicService.saveAnimal(null, { ...base, sex: '' }), invalid('sex', 'validation_required'));
+    await assert.rejects(() => clinicService.saveAnimal(null, { ...base, sex: 'Outro' }), invalid('sex', 'validation_invalid_value'));
+    await assert.rejects(() => clinicService.saveAnimal(null, { ...base, tutor: '' }), invalid('tutor', 'validation_required'));
+    await assert.rejects(() => clinicService.saveAnimal(null, { ...base, species: '  ' }), invalid('species', 'validation_required'));
+    const future = await clinicService.saveAnimal(null, { ...base, birthDate: '2999-01-01' }).catch((error) => error);
+    assert.ok(invalid('birthDate', 'invalid_date')(future));
+    assert.equal(getErrorMessage(future), 'Data de nascimento: A data de nascimento não pode ser futura.');
+    const missingSex = await clinicService.saveAnimal(null, { ...base, sex: '' }).catch((error) => error);
+    assert.equal(getErrorMessage(missingSex), 'Sexo: preenchimento obrigatório.');
+    assert.equal((await clinicService.saveAnimal(created.id, { ...created, birthDate: today })).birthDate, today);
+    await clinicService.deleteAnimal(created.id);
+    await clinicService.deleteAnimal(raw.id);
+  });
+
+  await t.test('REQ 05 — Exclusão de animal respeita perfis e preserva animais com histórico', async () => {
+    as(vet);
+    // Veterinário consulta, cadastra e altera animais (CRU), mas não exclui.
+    let byVet = await clinicService.saveAnimal(null, { name: 'Pipoca', species: 'Gato', breed: '', sex: 'Fêmea', birthDate: '', tutor: tutor.id, active: true });
+    byVet = await clinicService.saveAnimal(byVet.id, { ...byVet, name: 'Pipoca editada' });
+    assert.equal(byVet.name, 'Pipoca editada');
+    await assert.rejects(() => clinicService.deleteAnimal(byVet.id), denied);
+    const vaccination = await clinicService.saveClinical('vaccinations', null, { animal: byVet.id, veterinarian: vet.authStore.record.id, date: today, name: 'V4', nextDate: '' });
+
+    as(reception);
+    // Com registro clínico vinculado, o PocketBase recusa a exclusão; o cadastro pode ser inativado.
+    const blocked = await clinicService.deleteAnimal(byVet.id).catch((error) => error);
+    assert.equal(blocked.status, 400);
+    assert.match(getErrorMessage(blocked, 'Animal com histórico.'), /Animal com histórico/);
+    assert.equal((await clinicService.setAnimalActive(byVet.id, false)).active, false);
+    assert.equal((await reception.collection('vaccinations').getOne(vaccination.id)).animal, byVet.id);
+
+    // Sem vínculos, recepção e administração excluem.
+    const free = await clinicService.saveAnimal(null, { name: 'Sem vínculo', species: 'Cão', sex: 'Macho', tutor: tutor.id, active: true });
+    await clinicService.deleteAnimal(free.id);
+    await assert.rejects(() => reception.collection('animals').getOne(free.id), (error) => error.status === 404);
+    as(admin);
+    const byAdmin = await clinicService.saveAnimal(null, { name: 'Temporário', species: 'Ave', sex: 'Macho', tutor: tutor.id, active: true });
+    await clinicService.deleteAnimal(byAdmin.id);
+    await assert.rejects(() => anonymous.collection('animals').delete(animal.id), denied);
+  });
+
+  let paulo;
+  const pauloData = {
+    name: ' Dr. Paulo Reis ', email: ' Paulo.Reis@VetCare.com ', crmv: 'ba 01234', specialty: ' Dermatologia ',
+    phone: '(71) 98888-7777', password: 'paulo123456', passwordConfirm: 'paulo123456',
+  };
+
+  await t.test('REQ 06 — Administração cadastra veterinário com conta de acesso e CRMV único', async () => {
+    as(admin);
+    paulo = await clinicService.createVeterinarian(pauloData);
+    assert.deepEqual(
+      [paulo.name, paulo.email, paulo.role, paulo.crmv, paulo.specialty, paulo.phone],
+      ['Dr. Paulo Reis', 'paulo.reis@vetcare.com', 'veterinario', 'CRMV-BA 1234', 'Dermatologia', '71988887777'],
+    );
+    const independent = new PocketBase(url);
+    await independent.collection('users').authWithPassword('paulo.reis@vetcare.com', pauloData.password);
+    assert.equal(independent.authStore.record.role, 'veterinario');
+
+    const invalid = (field, code) => (error) => error.status === 400 && error.response?.data?.[field]?.code === code;
+    const other = { ...pauloData, email: 'outro.vet@vetcare.com' };
+    await assert.rejects(() => clinicService.createVeterinarian({ ...other, crmv: 'CRMV-XX 123' }), invalid('crmv', 'invalid_crmv'));
+    await assert.rejects(() => clinicService.createVeterinarian({ ...other, crmv: '1234567' }), invalid('crmv', 'invalid_crmv'));
+    await assert.rejects(() => clinicService.createVeterinarian({ ...other, crmv: 'SP 1', phone: '7199' }), invalid('phone', 'invalid_phone'));
+    const duplicate = await clinicService.createVeterinarian({ ...other, crmv: 'CRMV-BA 1234' }).catch((error) => error);
+    assert.ok(invalid('crmv', 'validation_not_unique')(duplicate));
+    assert.equal(getErrorMessage(duplicate), 'CRMV: já existe um registro com este valor.');
+    // A normalização também vale para clientes da API que não usam o serviço do frontend.
+    const raw = await admin.collection('users').create({ ...other, role: 'veterinario', crmv: '987/sp', phone: '(11) 3333-4444' });
+    assert.deepEqual([raw.crmv, raw.phone], ['CRMV-SP 987', '1133334444']);
+    await admin.collection('users').delete(raw.id);
+
+    // Recepção e veterinário não cadastram veterinários (RBAC: recepção R, veterinário RU).
+    for (const actor of [reception, vet]) {
+      as(actor);
+      await assert.rejects(() => clinicService.createVeterinarian({ ...other, crmv: 'SP 2' }), denied);
+    }
+    as(reception);
+    const listed = (await clinicService.veterinarians()).find((record) => record.id === paulo.id);
+    assert.deepEqual([listed.crmv, listed.specialty], ['CRMV-BA 1234', 'Dermatologia']);
+  });
+
+  await t.test('REQ 06 — Recepção só consulta; veterinário altera apenas os próprios dados e não o CRMV', async () => {
+    as(reception);
+    assert.ok((await clinicService.veterinarians()).some((record) => record.id === vet.authStore.record.id));
     await assert.rejects(() => clinicService.saveVeterinarian(vet.authStore.record.id, { name: 'Mudança indevida', specialty: '', phone: '' }), denied);
     as(admin);
-    const updated = await clinicService.saveVeterinarian(vet.authStore.record.id, { name: 'Dra. Emily', specialty: 'Clínica geral', phone: '71911111111' });
-    assert.equal(updated.specialty, 'Clínica geral');
+    const updated = await clinicService.saveVeterinarian(vet.authStore.record.id, { name: 'Dra. Emily', crmv: 'CRMV-BA 999', specialty: 'Clínica geral', phone: '71911111111' });
+    assert.deepEqual([updated.specialty, updated.crmv], ['Clínica geral', 'CRMV-BA 999']);
+    await assert.rejects(() => clinicService.saveVeterinarian(paulo.id, { ...paulo, crmv: 'BA 999' }), (error) => error.response?.data?.crmv?.code === 'validation_not_unique');
+
+    as(vet);
+    const own = await clinicService.saveVeterinarian(vet.authStore.record.id, { name: 'Dra. Emily', specialty: 'Cardiologia', phone: '(71) 3222-1111' });
+    assert.deepEqual([own.specialty, own.phone, own.crmv], ['Cardiologia', '7132221111', 'CRMV-BA 999']);
+    await assert.rejects(() => vet.collection('users').update(vet.authStore.record.id, { crmv: 'CRMV-BA 1000' }), denied);
+    await assert.rejects(() => clinicService.saveVeterinarian(paulo.id, { name: 'Edição indevida', specialty: '', phone: '' }), denied);
+    assert.equal((await admin.collection('users').getOne(paulo.id)).name, 'Dr. Paulo Reis');
+  });
+
+  await t.test('REQ 06 — Só a administração exclui veterinários, e quem tem histórico é preservado', async () => {
+    for (const actor of [reception, vet]) {
+      as(actor);
+      await assert.rejects(() => clinicService.deleteVeterinarian(paulo.id), denied);
+    }
+    const patient = await reception.collection('animals').create({ name: 'Paciente do Paulo', species: 'Cão', sex: 'Macho', tutor: tutor.id, active: true });
+    const pauloSession = new PocketBase(url);
+    await pauloSession.collection('users').authWithPassword('paulo.reis@vetcare.com', pauloData.password);
+    await pauloSession.collection('vaccinations').create({ animal: patient.id, veterinarian: paulo.id, date: today, name: 'Antirrábica' });
+
+    as(admin);
+    const blocked = await clinicService.deleteVeterinarian(paulo.id).catch((error) => error);
+    assert.equal(blocked.status, 400);
+    assert.ok(await admin.collection('users').getOne(paulo.id));
+    const temporary = await clinicService.createVeterinarian({ ...pauloData, email: 'temporario@vetcare.com', crmv: 'CRMV-SP 77' });
+    await clinicService.deleteVeterinarian(temporary.id);
+    await assert.rejects(() => admin.collection('users').getOne(temporary.id), (error) => error.status === 404);
   });
 
   await t.test('Agenda persiste, impede conflito concorrente e permite cancelar e reutilizar horário', async () => {
     as(reception);
-    const payload = { animal: animal.id, veterinarian: vet.authStore.record.id, date: today, time: '09:00', type: 'Consulta' };
+    const payload = { animal: animal.id, veterinarian: vet.authStore.record.id, date: tomorrow, time: '09:00', type: 'Consulta' };
     const attempts = await Promise.allSettled([clinicService.schedule(payload), clinicService.schedule(payload)]);
     assert.equal(attempts.filter((result) => result.status === 'fulfilled').length, 1);
     const appointment = attempts.find((result) => result.status === 'fulfilled').value;
-    const loaded = (await clinicService.appointments(today, today)).find((record) => record.id === appointment.id);
+    const loaded = (await clinicService.appointments(tomorrow, tomorrow)).find((record) => record.id === appointment.id);
     assert.equal(loaded.expand.animal.expand.tutor.id, tutor.id);
     await assert.rejects(() => reception.collection('appointments').update(appointment.id, { status: 'Cancelada', time: '10:00' }), denied);
     await clinicService.cancel(appointment.id);
     assert.equal((await reception.collection('appointments').getOne(appointment.id)).status, 'Cancelada');
     await clinicService.schedule(payload);
-    assert.equal((await clinicService.appointments(today, today)).filter((record) => record.status === 'Agendada').length, 1);
+    assert.equal((await clinicService.appointments(tomorrow, tomorrow)).filter((record) => record.status === 'Agendada').length, 1);
+  });
+
+  await t.test('REQ 07 — Consulta relaciona animal, tutor, veterinário, data e horário', async () => {
+    as(reception);
+    const otherTutor = await clinicService.saveTutor(null, { name: 'Outro tutor', cpf: '52998224725', phone: '71912345678' });
+    const bidu = await clinicService.saveAnimal(null, { name: 'Bidu', species: 'Cão', sex: 'Macho', tutor: tutor.id, active: true });
+    const appointment = await clinicService.schedule({ animal: bidu.id, veterinarian: paulo.id, date: tomorrow, time: '11:00', type: '  Retorno   pós-cirúrgico ' });
+    assert.deepEqual([appointment.tutor, appointment.type, appointment.status], [tutor.id, 'Retorno pós-cirúrgico', 'Agendada']);
+    const loaded = (await clinicService.appointments(tomorrow, tomorrow)).find((record) => record.id === appointment.id);
+    assert.deepEqual([loaded.expand.tutor.name, loaded.expand.animal.name, loaded.expand.veterinarian.name], ['Tutor atualizado', 'Bidu', 'Dr. Paulo Reis']);
+
+    // O tutor vem sempre do animal, mesmo que outro cliente da API informe um tutor diferente.
+    const raw = await reception.collection('appointments').create({ animal: bidu.id, tutor: otherTutor.id, veterinarian: vet.authStore.record.id, date: tomorrow, time: '15:00', type: 'Consulta', status: 'Agendada' });
+    assert.equal(raw.tutor, tutor.id);
+    // O cancelamento não altera o tutor, e o histórico mantém o tutor da época se o animal mudar de tutor.
+    await assert.rejects(() => reception.collection('appointments').update(raw.id, { status: 'Cancelada', tutor: otherTutor.id }), denied);
+    await clinicService.cancel(raw.id);
+    await clinicService.saveAnimal(bidu.id, { ...bidu, tutor: otherTutor.id });
+    assert.equal((await reception.collection('appointments').getOne(appointment.id)).tutor, tutor.id);
+    const next = await clinicService.schedule({ animal: bidu.id, veterinarian: paulo.id, date: tomorrow, time: '16:00', type: 'Consulta' });
+    assert.equal(next.tutor, otherTutor.id);
+    // O tutor com consultas registradas continua protegido contra exclusão.
+    await assert.rejects(() => clinicService.deleteTutor(tutor.id), (error) => error.status === 400);
+  });
+
+  await t.test('REQ 07 — Agendamento recusa data passada, animal inativo, conflitos e quem não é veterinário', async () => {
+    as(reception);
+    const invalid = (field, code) => (error) => error.status === 400 && error.response?.data?.[field]?.code === code;
+    const base = { animal: animal.id, veterinarian: paulo.id, date: tomorrow, time: '14:00', type: 'Consulta' };
+
+    const pastDate = await clinicService.schedule({ ...base, date: past }).catch((error) => error);
+    assert.ok(invalid('date', 'past_date')(pastDate));
+    assert.equal(getErrorMessage(pastDate), 'Data: Não é possível agendar em uma data passada.');
+
+    const inactive = await clinicService.saveAnimal(null, { name: 'Inativo', species: 'Gato', sex: 'Fêmea', tutor: tutor.id, active: false });
+    await assert.rejects(() => clinicService.schedule({ ...base, animal: inactive.id }), invalid('animal', 'inactive_animal'));
+
+    await clinicService.schedule(base);
+    const luna = await clinicService.saveAnimal(null, { name: 'Luna', species: 'Gata', sex: 'Fêmea', tutor: tutor.id, active: true });
+    const vetBusy = await clinicService.schedule({ ...base, animal: luna.id }).catch((error) => error);
+    assert.ok(invalid('veterinarian', 'slot_taken')(vetBusy));
+    assert.equal(getErrorMessage(vetBusy), 'Veterinário: Já possui consulta agendada neste horário.');
+    const animalBusy = await clinicService.schedule({ ...base, veterinarian: vet.authStore.record.id }).catch((error) => error);
+    assert.ok(invalid('animal', 'animal_busy')(animalBusy));
+    assert.equal(getErrorMessage(animalBusy), 'Animal: Já possui consulta agendada neste horário.');
+
+    // O índice único também barra o mesmo animal em dois veterinários ao mesmo tempo.
+    const attempts = await Promise.allSettled([paulo.id, vet.authStore.record.id].map((veterinarian) => clinicService.schedule({ ...base, time: '17:00', veterinarian })));
+    assert.equal(attempts.filter((result) => result.status === 'fulfilled').length, 1);
+
+    await assert.rejects(() => clinicService.schedule({ ...base, time: '10:00', veterinarian: admin.authStore.record.id }), denied);
+    await assert.rejects(() => clinicService.schedule({ ...base, time: '12:30' }), invalid('time', 'validation_invalid_format'));
+    await assert.rejects(() => anonymous.collection('appointments').create({ ...base, time: '16:00', status: 'Agendada' }), denied);
   });
 
   await t.test('Atendimentos, vacinas e prescrições reais respeitam os perfis de leitura e escrita', async () => {
@@ -288,6 +467,7 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
   });
 
   await t.test('Dados sobrevivem ao reinício completo do backend', async () => {
+    const appointments = (await admin.collection('appointments').getFullList()).length;
     await stop();
     await start();
     const independent = new PocketBase(url);
@@ -298,7 +478,7 @@ test('Integração real com PocketBase isolado (sem alterar server/pb_data)', as
     assert.equal((await independent.collection('medical_records').getOne(visit.id)).title, 'Consulta');
     assert.equal((await independent.collection('vaccinations').getOne(vaccine.id)).name, 'Vacina atualizada');
     assert.equal((await independent.collection('prescriptions').getOne(prescription.id)).active, false);
-    assert.equal((await independent.collection('appointments').getFullList()).length, 2);
+    assert.equal((await independent.collection('appointments').getFullList()).length, appointments);
   });
 });
 
@@ -316,6 +496,15 @@ test('REQ 04 — Máscaras e validações de CPF e telefone no frontend', () => 
   assert.ok(isValidPhone('(71) 98765-4321'));
   assert.ok(isValidPhone('(71) 3333-4444'));
   for (const phone of ['(71) 8765-432', '(01) 98765-4321', '(71) 88765-4321', '']) assert.ok(!isValidPhone(phone), phone);
+});
+
+test('REQ 06 — Normalização e validação do CRMV no frontend', () => {
+  assert.equal(normalizeCrmv('crmv-ba 1234'), 'CRMV-BA 1234');
+  assert.equal(normalizeCrmv('BA 01234'), 'CRMV-BA 1234');
+  assert.equal(normalizeCrmv('1234/sp'), 'CRMV-SP 1234');
+  assert.equal(normalizeCrmv(' CRMV/RJ-56 '), 'CRMV-RJ 56');
+  for (const crmv of ['CRMV-BA 1234', 'sp 1', 'DF 123456']) assert.ok(isValidCrmv(crmv), crmv);
+  for (const crmv of ['CRMV-XX 1234', 'BA 1234567', 'BA', '1234', 'BA 0', '']) assert.ok(!isValidCrmv(crmv), crmv);
 });
 
 test('Datas locais e limites de mês não dependem de conversão UTC', () => {

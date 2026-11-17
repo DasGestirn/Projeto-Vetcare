@@ -3,6 +3,7 @@ const FIELD_LABELS = {
   tutor: 'Tutor', animal: 'Animal', veterinarian: 'Veterinário', date: 'Data', time: 'Horário',
   amountCents: 'Valor', phone: 'Telefone', title: 'Título', notes: 'Observações', instructions: 'Prescrição',
   nextDate: 'Próxima dose', birthDate: 'Data de nascimento', cpf: 'CPF', address: 'Endereço',
+  species: 'Espécie', breed: 'Raça', sex: 'Sexo', crmv: 'CRMV', specialty: 'Especialidade', type: 'Tipo de atendimento',
 };
 
 export function getErrorMessage(error, fallback = 'Não foi possível concluir a operação.') {
@@ -17,6 +18,7 @@ export function getErrorMessage(error, fallback = 'Não foi possível concluir a
       const label = FIELD_LABELS[field] || field;
       if (detail.code === 'validation_not_unique') return `${label}: já existe um registro com este valor.`;
       if (detail.code === 'validation_values_mismatch') return 'As senhas não coincidem.';
+      if (detail.code === 'validation_required') return `${label}: preenchimento obrigatório.`;
       return `${label}: ${detail.message || 'valor inválido.'}`;
     }).join(' ');
   }

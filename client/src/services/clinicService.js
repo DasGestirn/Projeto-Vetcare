@@ -1,5 +1,6 @@
 import { pb } from '../pocketbase.js';
 import { onlyDigits } from '../utils/format.js';
+import { normalizeCrmv } from '../utils/validation.js';
 
 const list = (collection, options = {}) => pb.collection(collection).getFullList({ requestKey: null, ...options });
 const save = (collection, id, data) => id ? pb.collection(collection).update(id, data) : pb.collection(collection).create(data);
@@ -11,7 +12,7 @@ export const clinicService = {
   payments: (options) => list('payments', { sort: '-date,-created', expand: 'tutor', ...options }),
   appointments: (start, end, options) => list('appointments', {
     filter: pb.filter('date >= {:start} && date <= {:end}', { start, end }),
-    sort: 'date,time,created', expand: 'animal,animal.tutor,veterinarian', ...options,
+    sort: 'date,time,created', expand: 'animal,animal.tutor,tutor,veterinarian', ...options,
   }),
   clinical: (collection, animal, options) => list(collection, {
     filter: pb.filter('animal = {:animal}', { animal }), sort: '-date,-created', expand: 'veterinarian', ...options,
@@ -23,14 +24,31 @@ export const clinicService = {
   }),
   deleteTutor: (id) => pb.collection('tutors').delete(id),
   saveAnimal: (id, data) => save('animals', id, {
-    name: data.name.trim(), species: data.species.trim(), breed: data.breed.trim(),
+    name: data.name.trim(), species: data.species.trim(), breed: (data.breed || '').trim(), sex: data.sex,
     birthDate: data.birthDate || '', tutor: data.tutor, active: data.active,
   }),
-  saveVeterinarian: (id, data) => save('users', id, { name: data.name.trim(), specialty: data.specialty.trim(), phone: data.phone.trim() }),
+  setAnimalActive: (id, active) => pb.collection('animals').update(id, { active }),
+  deleteAnimal: (id) => pb.collection('animals').delete(id),
+  // REQ 06 — Veterinários são contas de `users` com perfil `veterinario`. O CRMV só é enviado quando
+  // informado: o próprio veterinário edita os demais dados, mas não altera o CRMV.
+  createVeterinarian: (data) => pb.collection('users').create({
+    name: data.name.trim(), email: data.email.trim().toLowerCase(), role: 'veterinario',
+    crmv: normalizeCrmv(data.crmv), specialty: (data.specialty || '').trim(), phone: onlyDigits(data.phone),
+    password: data.password, passwordConfirm: data.passwordConfirm, emailVisibility: true, verified: true,
+  }),
+  saveVeterinarian: (id, data) => save('users', id, {
+    name: data.name.trim(), specialty: (data.specialty || '').trim(), phone: onlyDigits(data.phone),
+    ...(data.crmv === undefined ? {} : { crmv: normalizeCrmv(data.crmv) }),
+  }),
+  deleteVeterinarian: (id) => pb.collection('users').delete(id),
   savePayment: (id, data) => save('payments', id, {
     tutor: data.tutor, date: data.date, amountCents: Math.round(Number(data.amount) * 100), status: data.status,
   }),
-  schedule: (data) => pb.collection('appointments').create({ ...data, status: 'Agendada' }),
+  // REQ 07 — O tutor da consulta é preenchido pelo backend a partir do animal.
+  schedule: (data) => pb.collection('appointments').create({
+    animal: data.animal, veterinarian: data.veterinarian, date: data.date, time: data.time,
+    type: (data.type || '').trim(), status: 'Agendada',
+  }),
   cancel: (id) => pb.collection('appointments').update(id, { status: 'Cancelada' }),
   saveClinical: (collection, id, data) => save(collection, id, data),
 };
