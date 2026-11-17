@@ -1,20 +1,15 @@
-import { Fragment, useState } from 'react';
-import { Group, Button, Paper, Text, Badge, Modal, TextInput, Stack } from '@mantine/core';
+import { Fragment, useMemo, useRef, useState } from 'react';
+import { Alert, Group, Button, Paper, Text, Badge, Modal, TextInput, Select, Stack } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { PageHeader } from '../../components/PageHeader/PageHeader';
+import { QueryState } from '../../components/QueryState';
+import { useClinicQuery, useClinicMutation } from '../../hooks/useClinic';
+import { clinicService } from '../../services/clinicService.js';
+import { dateKey } from '../../utils/format.js';
+import { getErrorMessage } from '../../utils/pocketbaseErrors.js';
 import classes from './VetSchedule.module.css';
 
-const vets = ['Dra. Ana Lima', 'Dr. Paulo Reis'];
 const times = Array.from({ length: 9 }, (_, i) => `${String(i + 9).padStart(2, '0')}:00`);
-
-const initialSchedule = {
-  '2026-10-08': {
-    '09:00-0': { text: 'Thor · Cão', sub: 'Marina Souza · Consulta' },
-    '11:00-0': { text: 'Bidu · Cão', sub: 'Ana Prado · Retorno', canceled: true },
-    '10:00-1': { text: 'Mel · Gata', sub: 'Carlos Lima · Vacinação' },
-    '11:00-1': { text: 'Luna · Gata', sub: 'Rita Alves · Consulta' },
-  },
-};
 
 const WEEKDAY_NAMES = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 const WEEKDAY_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -24,7 +19,7 @@ const MONTH_NAMES = [
 ];
 
 function toKey(date) {
-  return date.toISOString().slice(0, 10);
+  return dateKey(date);
 }
 
 function addDays(date, amount) {
@@ -34,9 +29,9 @@ function addDays(date, amount) {
 }
 
 function addMonths(date, amount) {
-  const next = new Date(date);
-  next.setMonth(next.getMonth() + amount);
-  return next;
+  const month = new Date(date.getFullYear(), date.getMonth() + amount, 1);
+  const lastDay = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+  return new Date(month.getFullYear(), month.getMonth(), Math.min(date.getDate(), lastDay));
 }
 
 function startOfWeek(date) {
@@ -80,226 +75,165 @@ function countAppointments(schedule, date) {
 
 export function VetSchedule() {
   const [view, setView] = useState('Dia');
-  const [currentDate, setCurrentDate] = useState(new Date(2026, 9, 8));
-  const [schedule, setSchedule] = useState(initialSchedule);
-
+  const [currentDate, setCurrentDate] = useState(() => new Date());
   const [cancelOpened, { open: openCancel, close: closeCancel }] = useDisclosure(false);
   const [scheduleOpened, { open: openSchedule, close: closeSchedule }] = useDisclosure(false);
   const [cancelTarget, setCancelTarget] = useState(null);
   const [scheduleTarget, setScheduleTarget] = useState(null);
-  const [scheduleForm, setScheduleForm] = useState({ animal: '', species: '', tutor: '', type: '' });
+  const [scheduleForm, setScheduleForm] = useState({ animal: '', type: '', date: '', time: '', veterinarian: '' });
+  const [formError, setFormError] = useState(null);
+  const [feedback, setFeedback] = useState('');
+  const lock = useRef(false);
+  const start = toKey(startOfWeek(startOfMonth(currentDate)));
+  const end = toKey(addDays(startOfWeek(startOfMonth(currentDate)), 41));
+  const vetsQuery = useClinicQuery(['veterinarians'], clinicService.veterinarians);
+  const animalsQuery = useClinicQuery(['animals'], clinicService.animals);
+  const appointmentsQuery = useClinicQuery(['appointments', start, end], (options) => clinicService.appointments(start, end, options));
+  const vets = vetsQuery.data || [];
+  const animals = animalsQuery.data || [];
+  const schedule = useMemo(() => {
+    const result = {};
+    for (const record of appointmentsQuery.data || []) {
+      const animal = record.expand?.animal;
+      const entry = { ...record, canceled: record.status === 'Cancelada',
+        text: [animal?.name, animal?.species].filter(Boolean).join(' · '),
+        sub: [animal?.expand?.tutor?.name, record.type].filter(Boolean).join(' · '),
+      };
+      const slot = `${record.time}-${record.veterinarian}`;
+      result[record.date] ||= {};
+      if (!result[record.date][slot] || result[record.date][slot].canceled || !entry.canceled) result[record.date][slot] = entry;
+    }
+    return result;
+  }, [appointmentsQuery.data]);
+  const scheduleMutation = useClinicMutation(clinicService.schedule);
+  const cancelMutation = useClinicMutation(clinicService.cancel);
+  const busy = scheduleMutation.isPending || cancelMutation.isPending;
+  const unavailable = vetsQuery.isPending || animalsQuery.isPending || appointmentsQuery.isPending
+    || vetsQuery.isError || animalsQuery.isError || appointmentsQuery.isError;
+  const selectedAnimal = animals.find((animal) => animal.id === scheduleForm.animal);
 
-  const updateScheduleField = (field) => (event) => {
-    const { value } = event.currentTarget;
-    setScheduleForm((f) => ({ ...f, [field]: value }));
-  };
-
-  const goToDay = (date) => {
-    setCurrentDate(date);
-    setView('Dia');
-  };
-
-  const goPrevious = () => {
-    if (view === 'Dia') setCurrentDate((d) => addDays(d, -1));
-    else if (view === 'Semana') setCurrentDate((d) => addDays(d, -7));
-    else setCurrentDate((d) => addMonths(d, -1));
-  };
-
-  const goNext = () => {
-    if (view === 'Dia') setCurrentDate((d) => addDays(d, 1));
-    else if (view === 'Semana') setCurrentDate((d) => addDays(d, 7));
-    else setCurrentDate((d) => addMonths(d, 1));
-  };
-
-  const periodLabel = view === 'Dia'
-    ? formatDayLabel(currentDate)
-    : view === 'Semana'
-      ? formatWeekLabel(currentDate)
-      : formatMonthLabel(currentDate);
-
-  const handleSlotClick = (date, time, vetIndex, appt) => {
+  const goToDay = (date) => { setCurrentDate(date); setView('Dia'); };
+  const goPrevious = () => setCurrentDate((date) => view === 'Dia' ? addDays(date, -1) : view === 'Semana' ? addDays(date, -7) : addMonths(date, -1));
+  const goNext = () => setCurrentDate((date) => view === 'Dia' ? addDays(date, 1) : view === 'Semana' ? addDays(date, 7) : addMonths(date, 1));
+  const periodLabel = view === 'Dia' ? formatDayLabel(currentDate) : view === 'Semana' ? formatWeekLabel(currentDate) : formatMonthLabel(currentDate);
+  const handleSlotClick = (date, time, veterinarian, appt) => {
+    if (busy || unavailable) return;
+    setFormError(null);
     if (appt && !appt.canceled) {
-      setCancelTarget({ date, time, vetIndex, appt });
+      setCancelTarget({ appt, veterinarian });
       openCancel();
     } else {
-      setScheduleTarget({ date, time, vetIndex });
-      const [animal = '', species = ''] = (appt?.text || '').split(' · ');
-      const [tutor = '', type = ''] = (appt?.sub || '').split(' · ');
-      setScheduleForm({ animal, species, tutor, type });
+      setScheduleTarget({ date, time, veterinarian });
+      setScheduleForm({ animal: appt?.animal || '', type: appt?.type || '', date: toKey(date), time, veterinarian: veterinarian.id });
       openSchedule();
     }
   };
-
-  const confirmCancel = () => {
-    const { date, time, vetIndex } = cancelTarget;
-    const key = toKey(date);
-    const slotKey = `${time}-${vetIndex}`;
-
-    setSchedule((prev) => ({
-      ...prev,
-      [key]: {
-        ...prev[key],
-        [slotKey]: { ...prev[key][slotKey], canceled: true },
-      },
-    }));
-    closeCancel();
+  const newAppointment = () => {
+    setFormError(null);
+    setScheduleTarget({});
+    setScheduleForm({ animal: '', type: '', date: toKey(currentDate), time: times[0], veterinarian: vets[0]?.id || '' });
+    openSchedule();
   };
-
-  const confirmSchedule = () => {
-    const { date, time, vetIndex } = scheduleTarget;
-    const key = toKey(date);
-    const slotKey = `${time}-${vetIndex}`;
-    const text = [scheduleForm.animal.trim(), scheduleForm.species.trim()].filter(Boolean).join(' · ');
-    const sub = [scheduleForm.tutor.trim(), scheduleForm.type.trim()].filter(Boolean).join(' · ');
-
-    setSchedule((prev) => ({
-      ...prev,
-      [key]: {
-        ...prev[key],
-        [slotKey]: { text, sub },
-      },
-    }));
-    closeSchedule();
+  const confirmCancel = async () => {
+    if (lock.current || !cancelTarget) return;
+    lock.current = true;
+    setFormError(null);
+    try {
+      await cancelMutation.mutateAsync(cancelTarget.appt.id);
+      closeCancel();
+      setFeedback('Atendimento cancelado.');
+    } catch (error) { setFormError(getErrorMessage(error)); }
+    finally { lock.current = false; }
   };
+  const confirmSchedule = async (event) => {
+    event.preventDefault();
+    if (lock.current) return;
+    lock.current = true;
+    setFormError(null);
+    try {
+      await scheduleMutation.mutateAsync({ ...scheduleForm, type: scheduleForm.type.trim() });
+      setCurrentDate(new Date(`${scheduleForm.date}T12:00:00`));
+      closeSchedule();
+      setFeedback('Atendimento agendado.');
+    } catch (error) { setFormError(getErrorMessage(error, 'Não foi possível agendar. Verifique se o horário está livre.')); }
+    finally { lock.current = false; }
+  };
+  const setField = (name, value) => setScheduleForm((form) => ({ ...form, [name]: value }));
 
   return (
     <>
-      <PageHeader
-        title="Agenda"
-        actionLabel="Nova consulta"
-        onAction={() => alert('Formulário de nova consulta (em breve).')}
-      />
-
+      <PageHeader title="Agenda" actionLabel="Nova consulta" onAction={newAppointment} actionDisabled={unavailable || busy || !vets.length || !animals.length} />
       <Group mb="md" gap="xs">
         <Button variant="default" onClick={goPrevious}>Anterior</Button>
         <Text fw={600} px="xs">{periodLabel}</Text>
         <Button variant="default" onClick={goNext}>Próximo</Button>
         <div className={classes.grow} />
-        {['Dia', 'Semana', 'Mês'].map((v) => (
-          <Button
-            key={v}
-            variant={view === v ? 'filled' : 'default'}
-            onClick={() => setView(v)}
-          >
-            {v}
-          </Button>
-        ))}
+        {['Dia', 'Semana', 'Mês'].map((value) => <Button key={value} variant={view === value ? 'filled' : 'default'} onClick={() => setView(value)}>{value}</Button>)}
       </Group>
-
+      {feedback && <Text c="teal" mb="md" role="status">{feedback}</Text>}
       <Paper withBorder p="lg">
-        {view === 'Dia' && (
-          <DayView
-            date={currentDate}
-            dayAppointments={schedule[toKey(currentDate)] || {}}
-            onSlotClick={handleSlotClick}
-          />
-        )}
-        {view === 'Semana' && <WeekView date={currentDate} schedule={schedule} onSelectDay={goToDay} />}
-        {view === 'Mês' && <MonthView date={currentDate} schedule={schedule} onSelectDay={goToDay} />}
+        <QueryState query={vetsQuery} empty={vets.length === 0} emptyMessage="Nenhum veterinário cadastrado. Cadastre um usuário com esse perfil." />
+        <QueryState query={animalsQuery} empty={animals.length === 0} emptyMessage="Cadastre os animais em Registros antes de agendar." />
+        <QueryState query={appointmentsQuery} />
+        {!unavailable && vets.length > 0 && <>
+          {view === 'Dia' && <DayView date={currentDate} vets={vets} dayAppointments={schedule[toKey(currentDate)] || {}} onSlotClick={handleSlotClick} disabled={busy || !animals.length} />}
+          {view === 'Semana' && <WeekView date={currentDate} schedule={schedule} onSelectDay={goToDay} />}
+          {view === 'Mês' && <MonthView date={currentDate} schedule={schedule} onSelectDay={goToDay} />}
+        </>}
       </Paper>
-
-      <Modal opened={cancelOpened} onClose={closeCancel} title="Cancelar atendimento" centered>
-        {cancelTarget && (
-          <Stack>
-            <Text size="sm">
-              Tem certeza que deseja cancelar o atendimento de{' '}
-              <strong>{cancelTarget.appt.text}</strong> ({cancelTarget.appt.sub}) às {cancelTarget.time} com{' '}
-              {vets[cancelTarget.vetIndex]}?
-            </Text>
-            <Group justify="flex-end">
-              <Button variant="default" onClick={closeCancel}>Manter atendimento</Button>
-              <Button color="red" onClick={confirmCancel}>Cancelar atendimento</Button>
-            </Group>
-          </Stack>
-        )}
+      <Modal opened={cancelOpened} onClose={() => { if (!busy) closeCancel(); }} title="Cancelar atendimento" centered closeOnClickOutside={!busy} closeOnEscape={!busy} withCloseButton={!busy}>
+        {cancelTarget && <Stack>
+          {formError && <Alert color="red" role="alert">{formError}</Alert>}
+          <Text size="sm">Tem certeza que deseja cancelar o atendimento de <strong>{cancelTarget.appt.text}</strong> ({cancelTarget.appt.sub}) às {cancelTarget.appt.time} com {cancelTarget.veterinarian.name}?</Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={closeCancel} disabled={busy}>Manter atendimento</Button>
+            <Button color="red" onClick={confirmCancel} loading={cancelMutation.isPending}>Cancelar atendimento</Button>
+          </Group>
+        </Stack>}
       </Modal>
-
-      <Modal opened={scheduleOpened} onClose={closeSchedule} title="Agendar atendimento" centered>
-        {scheduleTarget && (
-          <Stack>
-            <Text size="sm" c="dimmed">
-              {vets[scheduleTarget.vetIndex]} · {scheduleTarget.time} · {formatDayLabel(scheduleTarget.date)}
-            </Text>
+      <Modal opened={scheduleOpened} onClose={() => { if (!busy) closeSchedule(); }} title="Agendar atendimento" centered closeOnClickOutside={!busy} closeOnEscape={!busy} withCloseButton={!busy}>
+        {scheduleTarget && <form onSubmit={confirmSchedule}><Stack>
+          {formError && <Alert color="red" role="alert">{formError}</Alert>}
+          {scheduleTarget.veterinarian ? <Text size="sm" c="dimmed">{scheduleTarget.veterinarian.name} · {scheduleForm.time} · {formatDayLabel(scheduleTarget.date)}</Text> : <>
+            <Select label="Veterinário" required allowDeselect={false} data={vets.map((vet) => ({ value: vet.id, label: vet.name }))} value={scheduleForm.veterinarian} onChange={(value) => setField('veterinarian', value)} disabled={busy} />
             <Group grow>
-              <TextInput
-                label="Animal"
-                placeholder="Ex: Thor"
-                value={scheduleForm.animal}
-                onChange={updateScheduleField('animal')}
-              />
-              <TextInput
-                label="Espécie"
-                placeholder="Ex: Cão"
-                value={scheduleForm.species}
-                onChange={updateScheduleField('species')}
-              />
+              <TextInput type="date" label="Data" required value={scheduleForm.date} onChange={(event) => setField('date', event.currentTarget.value)} disabled={busy} />
+              <Select label="Horário" required allowDeselect={false} data={times} value={scheduleForm.time} onChange={(value) => setField('time', value)} disabled={busy} />
             </Group>
-            <Group grow>
-              <TextInput
-                label="Tutor"
-                placeholder="Ex: Marina Souza"
-                value={scheduleForm.tutor}
-                onChange={updateScheduleField('tutor')}
-              />
-              <TextInput
-                label="Tipo de atendimento"
-                placeholder="Ex: Consulta"
-                value={scheduleForm.type}
-                onChange={updateScheduleField('type')}
-              />
-            </Group>
-            <Group justify="flex-end">
-              <Button variant="default" onClick={closeSchedule}>Cancelar</Button>
-              <Button
-                onClick={confirmSchedule}
-                disabled={!scheduleForm.animal.trim() || !scheduleForm.tutor.trim()}
-              >
-                Agendar atendimento
-              </Button>
-            </Group>
-          </Stack>
-        )}
+          </>}
+          <Group grow>
+            <Select label="Animal" searchable required allowDeselect={false} data={animals.map((animal) => ({ value: animal.id, label: `${animal.name} · ${animal.expand?.tutor?.name || '—'}` }))} value={scheduleForm.animal || null} onChange={(value) => setField('animal', value)} disabled={busy} />
+            <TextInput label="Espécie" value={selectedAnimal?.species || ''} readOnly />
+          </Group>
+          <Group grow>
+            <TextInput label="Tutor" value={selectedAnimal?.expand?.tutor?.name || ''} readOnly />
+            <TextInput label="Tipo de atendimento" required value={scheduleForm.type} onChange={(event) => setField('type', event.currentTarget.value)} disabled={busy} />
+          </Group>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={closeSchedule} disabled={busy}>Cancelar</Button>
+            <Button type="submit" loading={scheduleMutation.isPending} disabled={!scheduleForm.animal || !scheduleForm.type.trim()}>Agendar atendimento</Button>
+          </Group>
+        </Stack></form>}
       </Modal>
     </>
   );
 }
 
-function DayView({ date, dayAppointments, onSlotClick }) {
+function DayView({ date, vets, dayAppointments, onSlotClick, disabled }) {
   return (
-    <div className={classes.calendar}>
+    <div className={classes.calendar} style={{ gridTemplateColumns: `90px repeat(${vets.length}, minmax(140px, 1fr))`, overflowX: 'auto' }}>
       <div />
-      {vets.map((vet) => <Text key={vet} fw={700}>{vet}</Text>)}
-
-      {times.map((time) => (
-        <Fragment key={time}>
-          <Text fw={500} className={classes.time}>{time}</Text>
-          {vets.map((vet, vetIndex) => {
-            const appt = dayAppointments[`${time}-${vetIndex}`];
-            const className = appt
-              ? (appt.canceled ? classes.cancel : classes.appointment)
-              : classes.free;
-
-            return (
-              <button
-                key={vet}
-                type="button"
-                className={className}
-                onClick={() => onSlotClick(date, time, vetIndex, appt)}
-              >
-                {appt ? (
-                  <div>
-                    <Text size="sm" fw={600}>{appt.text}</Text>
-                    <Text size="xs">{appt.sub}</Text>
-                    {appt.canceled && <Badge color="orange" size="xs" mt={4}>Cancelada</Badge>}
-                  </div>
-                ) : (
-                  <Text size="sm" c="dimmed">Horário livre</Text>
-                )}
-              </button>
-            );
-          })}
-        </Fragment>
-      ))}
+      {vets.map((vet) => <Text key={vet.id} fw={700}>{vet.name}</Text>)}
+      {times.map((time) => <Fragment key={time}>
+        <Text fw={500} className={classes.time}>{time}</Text>
+        {vets.map((vet) => {
+          const appt = dayAppointments[`${time}-${vet.id}`];
+          const className = appt ? (appt.canceled ? classes.cancel : classes.appointment) : classes.free;
+          return <button key={vet.id} type="button" disabled={disabled} className={className} onClick={() => onSlotClick(date, time, vet, appt)}>
+            {appt ? <div><Text size="sm" fw={600}>{appt.text}</Text><Text size="xs">{appt.sub}</Text>{appt.canceled && <Badge color="orange" size="xs" mt={4}>Cancelada</Badge>}</div> : <Text size="sm" c="dimmed">Horário livre</Text>}
+          </button>;
+        })}
+      </Fragment>)}
     </div>
   );
 }

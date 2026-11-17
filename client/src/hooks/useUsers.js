@@ -1,69 +1,33 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { userService } from '../services/userService';
+import { useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { userService } from '../services/userService.js';
+import { useAuth } from '../context/AuthContext';
+import { getErrorMessage } from '../utils/pocketbaseErrors.js';
 
 export function useUsers() {
-  const [users, setUsers] = useState([]);
+  const { user } = useAuth();
+  const client = useQueryClient();
   const [searchTerm, setSearchTerm] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  const fetchUsers = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const records = await userService.listUsers();
-      setUsers(records);
-    } catch (err) {
-      setError(err?.message || 'Erro ao carregar usuários.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchUsers();
-  }, [fetchUsers]);
-
-  const filteredUsers = useMemo(() => {
+  const query = useQuery({
+    queryKey: ['users', user?.id, user?.role],
+    queryFn: ({ signal }) => userService.listUsers({ signal }),
+    enabled: user?.role === 'administracao',
+  });
+  const refresh = () => client.invalidateQueries({ queryKey: ['users'] });
+  const add = useMutation({ mutationFn: userService.createUser, onSuccess: refresh });
+  const edit = useMutation({ mutationFn: ({ id, data }) => userService.updateUser(id, data), onSuccess: refresh });
+  const remove = useMutation({ mutationFn: userService.deleteUser, onSuccess: refresh });
+  const users = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    if (!term) return users;
-    return users.filter(
-      (u) =>
-        u.name?.toLowerCase().includes(term) ||
-        u.email?.toLowerCase().includes(term) ||
-        u.id?.toLowerCase().includes(term)
-    );
-  }, [users, searchTerm]);
-
-  const addUser = async (userData) => {
-    if (userData.password !== userData.passwordConfirm) {
-      throw new Error('As senhas não coincidem.');
-    }
-    await userService.createUser(userData);
-    await fetchUsers();
-  };
-
-  const editUser = async (id, userData) => {
-    if (userData.password && userData.password !== userData.passwordConfirm) {
-      throw new Error('As senhas não coincidem.');
-    }
-    await userService.updateUser(id, userData);
-    await fetchUsers();
-  };
-
-  const removeUser = async (id) => {
-    await userService.deleteUser(id);
-    await fetchUsers();
-  };
+    return (query.data || []).filter((record) => [record.name, record.email, record.id].some((value) => value?.toLowerCase().includes(term)));
+  }, [query.data, searchTerm]);
 
   return {
-    users: filteredUsers,
-    searchTerm,
-    setSearchTerm,
-    loading,
-    error,
-    addUser,
-    editUser,
-    removeUser,
+    users, searchTerm, setSearchTerm, loading: query.isPending,
+    error: query.error ? getErrorMessage(query.error, 'Erro ao carregar usuários.') : null,
+    refetch: query.refetch,
+    addUser: add.mutateAsync,
+    editUser: (id, data) => edit.mutateAsync({ id, data }),
+    removeUser: remove.mutateAsync,
   };
 }
